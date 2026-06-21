@@ -1,0 +1,15 @@
+# Build output (rebuilt on each machine; contains fetched JUCE + artifacts)
+build/
+cmake-build-*/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.xcodeproj
+*.xcworkspace
+
+# Misc
+*.log

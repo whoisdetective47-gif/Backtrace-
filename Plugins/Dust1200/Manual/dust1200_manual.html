@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DETECTIVE 47 // DUST 12.47 — CASE FILE MANUAL</title>
+<style>
+  /* ── Reset ─────────────────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* ── Base ───────────────────────────────────────────────────────────────── */
+  :root {
+    --paper:   #CEB870;
+    --paper2:  #B8A058;
+    --ink:     #1A1408;
+    --ink2:    #2E2410;
+    --amber:   #D09020;
+    --gold:    #E8C840;
+    --red:     #CC2020;
+    --dim:     #6A5020;
+    --rule:    #9A8040;
+    --stamp:   rgba(180, 20, 20, 0.72);
+    --bg:      #0A0806;
+    --dark-hd: #1E1608;
+  }
+
+  html { background: var(--bg); }
+
+  body {
+    font-family: 'Courier New', Courier, monospace;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.7;
+    padding: 40px 20px 80px;
+  }
+
+  /* ── Document wrapper ───────────────────────────────────────────────────── */
+  .document {
+    max-width: 780px;
+    margin: 0 auto;
+    background: linear-gradient(160deg, var(--paper) 0%, var(--paper2) 100%);
+    border: 1px solid var(--rule);
+    box-shadow: 0 12px 60px rgba(0,0,0,0.9), 0 2px 8px rgba(0,0,0,0.6);
+    position: relative;
+    padding: 0;
+  }
+
+  /* Aged paper texture via repeating line overlay */
+  .document::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent 0px,
+      transparent 21px,
+      rgba(0,0,0,0.035) 21px,
+      rgba(0,0,0,0.035) 22px
+    );
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── Cover / Header ─────────────────────────────────────────────────────── */
+  .cover {
+    background: var(--dark-hd);
+    padding: 36px 48px 28px;
+    position: relative;
+    z-index: 1;
+    border-bottom: 3px solid var(--amber);
+  }
+
+  .case-id {
+    font-size: 10px;
+    letter-spacing: 3px;
+    color: var(--amber);
+    margin-bottom: 10px;
+  }
+
+  .cover h1 {
+    font-size: 42px;
+    font-weight: 700;
+    color: var(--gold);
+    letter-spacing: 6px;
+    line-height: 1.1;
+    margin-bottom: 4px;
+  }
+
+  .cover .subtitle {
+    font-size: 11px;
+    letter-spacing: 4px;
+    color: var(--amber);
+    margin-bottom: 24px;
+  }
+
+  .cover .meta-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 24px;
+    font-size: 10px;
+    color: var(--dim);
+    border-top: 1px solid #3A2E10;
+    padding-top: 16px;
+  }
+
+  .cover .meta-grid span { color: var(--amber); }
+
+  /* CLASSIFIED stamp */
+  .stamp-classified {
+    position: absolute;
+    top: 32px;
+    right: 40px;
+    transform: rotate(-12deg);
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    color: var(--stamp);
+    border: 2px solid var(--stamp);
+    padding: 4px 10px;
+    opacity: 0.85;
+  }
+
+  /* ── Table of contents ──────────────────────────────────────────────────── */
+  .toc {
+    background: rgba(0,0,0,0.08);
+    border-left: 3px solid var(--amber);
+    margin: 0;
+    padding: 28px 48px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .toc-title {
+    font-size: 10px;
+    letter-spacing: 3px;
+    color: var(--dim);
+    margin-bottom: 14px;
+  }
+
+  .toc ol {
+    list-style: none;
+    counter-reset: toc;
+  }
+
+  .toc ol li {
+    counter-increment: toc;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--ink2);
+    margin-bottom: 5px;
+  }
+
+  .toc ol li::before {
+    content: counter(toc, decimal-leading-zero);
+    font-size: 9px;
+    color: var(--amber);
+    min-width: 22px;
+  }
+
+  .toc ol li .dots {
+    flex: 1;
+    border-bottom: 1px dotted var(--rule);
+    margin-bottom: 3px;
+  }
+
+  .toc ol li a { color: var(--ink2); text-decoration: none; }
+  .toc ol li a:hover { color: var(--amber); }
+
+  /* ── Body content ───────────────────────────────────────────────────────── */
+  .content {
+    padding: 0 48px 48px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── Section headings ───────────────────────────────────────────────────── */
+  .section {
+    margin-top: 52px;
+  }
+
+  .section-header {
+    background: var(--dark-hd);
+    color: var(--gold);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 4px;
+    padding: 10px 16px;
+    margin: 0 -16px 0;
+    border-left: 4px solid var(--amber);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .section-header .section-num {
+    font-size: 9px;
+    color: var(--amber);
+    letter-spacing: 2px;
+  }
+
+  .section-rule {
+    border: none;
+    border-top: 1px solid var(--rule);
+    margin: 12px 0 20px;
+  }
+
+  /* Sub-headings */
+  h3 {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    color: var(--amber);
+    margin: 28px 0 8px;
+    border-bottom: 1px dotted var(--rule);
+    padding-bottom: 4px;
+  }
+
+  h4 {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--ink);
+    letter-spacing: 2px;
+    margin: 20px 0 6px;
+  }
+
+  /* Body copy */
+  p {
+    font-size: 11.5px;
+    color: var(--ink);
+    margin-bottom: 12px;
+  }
+
+  /* ── Control spec box ───────────────────────────────────────────────────── */
+  .control-block {
+    background: rgba(0,0,0,0.06);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--amber);
+    padding: 14px 16px;
+    margin: 16px 0;
+  }
+
+  .control-block .ctrl-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ink);
+    letter-spacing: 2px;
+    margin-bottom: 4px;
+  }
+
+  .control-block .ctrl-meta {
+    font-size: 9.5px;
+    color: var(--dim);
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+  }
+
+  .control-block p {
+    font-size: 11px;
+    margin-bottom: 6px;
+  }
+
+  /* ── Case notes block ───────────────────────────────────────────────────── */
+  .case-note {
+    background: rgba(0,0,0,0.10);
+    border: 1px dashed var(--rule);
+    padding: 14px 18px;
+    margin: 20px 0;
+    position: relative;
+  }
+
+  .case-note::before {
+    content: '[ DETECTIVE 47 — FIELD NOTES ]';
+    position: absolute;
+    top: -9px;
+    left: 12px;
+    background: var(--paper);
+    font-size: 8px;
+    letter-spacing: 2px;
+    color: var(--amber);
+    padding: 0 6px;
+  }
+
+  .case-note p {
+    font-size: 11px;
+    font-style: italic;
+    color: var(--ink2);
+    margin-bottom: 6px;
+  }
+
+  .case-note .placeholder {
+    font-style: normal;
+    color: var(--red);
+    font-size: 10px;
+    opacity: 0.7;
+  }
+
+  /* ── Warning / tip callout ──────────────────────────────────────────────── */
+  .callout {
+    border-left: 3px solid var(--gold);
+    background: rgba(200,160,0,0.07);
+    padding: 10px 14px;
+    margin: 14px 0;
+    font-size: 11px;
+  }
+
+  .callout strong { color: var(--amber); letter-spacing: 1px; }
+
+  /* ── Signal flow diagram (text art) ────────────────────────────────────── */
+  .signal-flow {
+    font-size: 10.5px;
+    background: rgba(0,0,0,0.10);
+    border: 1px solid var(--rule);
+    padding: 18px;
+    margin: 16px 0;
+    white-space: pre;
+    overflow-x: auto;
+    line-height: 1.5;
+    color: var(--ink2);
+  }
+
+  /* ── Preset table ───────────────────────────────────────────────────────── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10.5px;
+    margin: 14px 0;
+  }
+
+  th {
+    background: var(--dark-hd);
+    color: var(--amber);
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 6px 10px;
+    text-align: left;
+    border: 1px solid var(--rule);
+  }
+
+  td {
+    padding: 5px 10px;
+    border: 1px solid rgba(154,128,64,0.3);
+    vertical-align: top;
+    color: var(--ink2);
+  }
+
+  tr:nth-child(even) td { background: rgba(0,0,0,0.04); }
+
+  /* ── Footer ─────────────────────────────────────────────────────────────── */
+  .doc-footer {
+    background: var(--dark-hd);
+    padding: 18px 48px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 2px solid var(--amber);
+    position: relative;
+    z-index: 1;
+  }
+
+  .doc-footer .footer-id {
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--dim);
+  }
+
+  .doc-footer .footer-sig {
+    font-size: 10px;
+    color: var(--amber);
+    font-style: italic;
+  }
+
+  /* ── Print ───────────────────────────────────────────────────────────────── */
+  @media print {
+    body { background: white; padding: 0; }
+    .document { box-shadow: none; max-width: 100%; }
+  }
+
+  /* ── Page break hint ─────────────────────────────────────────────────────── */
+  .page-break { border: none; border-top: 2px dashed var(--rule); margin: 48px 0; }
+
+  /* number list inside content */
+  ol.steps { margin: 10px 0 12px 20px; }
+  ol.steps li { font-size: 11px; color: var(--ink); margin-bottom: 6px; }
+  ul.bullets { margin: 10px 0 12px 20px; }
+  ul.bullets li { font-size: 11px; color: var(--ink); margin-bottom: 5px; list-style: square; }
+</style>
+</head>
+<body>
+
+<div class="document">
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!--  COVER                                                                -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="cover">
+    <div class="stamp-classified">CLASSIFIED</div>
+
+    <div class="case-id">DETECTIVE 47  //  CASE FILE D47-001  //  TECHNICAL DOSSIER</div>
+    <h1>DUST 12.47</h1>
+    <div class="subtitle">VINTAGE SAMPLER DEGRADATION PROCESSOR — OPERATIONS MANUAL</div>
+
+    <div class="meta-grid">
+      <div>SUBJECT: <span>Dust 12.47 VST3 / AU Plugin</span></div>
+      <div>FILE REV: <span>2.1</span></div>
+      <div>ISSUED BY: <span>Sound Detective / Detective 47</span></div>
+      <div>STATUS: <span>ACTIVE OPERATION</span></div>
+      <div>CLASSIFICATION: <span>Vintage Emulation / Bit Reduction / Gate</span></div>
+      <div>CONTACT: <span>thesounddetective.com</span></div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!--  TABLE OF CONTENTS                                                    -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="toc">
+    <div class="toc-title">// CONTENTS OF THIS DOSSIER //</div>
+    <ol>
+      <li><a href="#s1">Field Briefing — What is the Dust 12.47?</a><span class="dots"></span></li>
+      <li><a href="#s2">Signal Flow — How Evidence Moves Through the Unit</a><span class="dots"></span></li>
+      <li><a href="#s3">The Faders — Sampler Speed &amp; Pitch</a><span class="dots"></span></li>
+      <li><a href="#s4">Grid Mode — Speed Ratio Lock</a><span class="dots"></span></li>
+      <li><a href="#s5">Musical Mode — Pitch Interval Snap</a><span class="dots"></span></li>
+      <li><a href="#s6">The Dust — Bit Depth, Sample Rate, Drive &amp; Crunch</a><span class="dots"></span></li>
+      <li><a href="#s7">Jitter &amp; Noise</a><span class="dots"></span></li>
+      <li><a href="#s8">The Gate — Threshold, Release &amp; Noise SC</a><span class="dots"></span></li>
+      <li><a href="#s9">Shape — High Pass, Low Pass &amp; Tone</a><span class="dots"></span></li>
+      <li><a href="#s10">Machine Drift — Drift, Motion &amp; Stereo</a><span class="dots"></span></li>
+      <li><a href="#s11">Level — Mix, Output &amp; Delta Mode</a><span class="dots"></span></li>
+      <li><a href="#s12">Glide Controls</a><span class="dots"></span></li>
+      <li><a href="#s13">Presets</a><span class="dots"></span></li>
+      <li><a href="#s14">Creative Field Techniques</a><span class="dots"></span></li>
+      <li><a href="#s15">Specifications</a><span class="dots"></span></li>
+    </ol>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!--  CONTENT                                                              -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="content">
+
+    <!-- ─── 01 · BRIEFING ──────────────────────────────────────────────── -->
+    <div class="section" id="s1">
+      <div class="section-header">
+        <span class="section-num">FILE 01</span>
+        FIELD BRIEFING
+      </div>
+      <hr class="section-rule">
+
+      <p><strong>Dust 12.47</strong> is an original vintage-inspired sampler degradation processor built by Sound Detective / Detective 47. It is not a clone, model, or emulation of any specific hardware unit. It is inspired by the textures, workflows, and sonic character of classic 12-bit sampling culture — and then extended far beyond what any single piece of hardware could do.</p>
+
+      <p>Classic 12-bit samplers ran at low clock rates — around 26kHz — and used limited amplitude resolution. Every sound that passed through them was quantised down to a fraction of the values available in modern digital audio, and replayed from a clock that ran well below the standard. The aliasing, the noise floor, the way pitch and time moved together when you tuned a sound — these were not flaws. They became a sound. That sound shaped a generation of records.</p>
+
+      <p>Dust 12.47 is built around that reference point and extends it. You get full control over bit depth, low-clock aliasing, saturation, noise, gate, machine drift, and musical pitch movement — all in a single processor designed to degrade audio with intention. Take the bit depth to 4 for something that sounds like a radio left outside in the rain, or push it to 16 for clean reduction without crunch. Add a noise floor and gate it rhythmically. Let the machine drift independently on left and right channels. Lock the pitch fader to musical intervals so every move lands correctly.</p>
+
+      <p>This is a destruction machine with taste.</p>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR PERSONAL NOTE ON THE ORIGIN OF THIS PLUGIN GOES HERE. Why did you build it? What were you trying to hear? What records made you want this sound? ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 02 · SIGNAL FLOW ───────────────────────────────────────────── -->
+    <div class="section" id="s2">
+      <div class="section-header">
+        <span class="section-num">FILE 02</span>
+        SIGNAL FLOW — HOW EVIDENCE MOVES THROUGH THE UNIT
+      </div>
+      <hr class="section-rule">
+
+      <p>Understanding the order of operations is the difference between using the Dust 12.47 as a simple bit crusher and using it as an instrument. Every stage was placed deliberately.</p>
+
+      <div class="signal-flow">INPUT (stereo dry signal)
+    │
+    ├─── Dry copy stored for MIX and DELTA comparison
+    │
+    ▼
+[ SAMPLER SPEED ]  — Varispeed: pitch AND time change together
+    │
+    ▼
+[ MODERN PITCH ]   — Pitch only: time stays fixed
+    │
+    ▼
+[ MACHINE DRIFT ]  — Per-channel analog wander (Drive, SR, Tone drift)
+    │
+    ▼
+[ DRIVE + CRUNCH ] — Saturation (before converters)
+    │
+    ▼
+[ BIT DEPTH ]      — 12-bit quantisation (or 4–16)
+    │
+    ▼
+[ SAMPLE RATE ]    — Clock reduction (downsampling + aliasing)
+    │
+    ▼
+[ NOISE ]          — Vinyl-style noise floor added
+    │
+    ▼
+[ JITTER ]         — Sample clock timing instability
+    │
+    ▼
+[ HIGH PASS ]      — DC and sub removal
+[ LOW PASS ]       — Frequency ceiling
+[ TONE ]           — High shelf tilt
+    │
+    ▼
+[ DC BLOCKER ]     — Removes DC offset from distortion stages
+    │
+    ▼
+[ GATE ]           — Threshold / Release
+         KEY = Dry signal  (standard mode)
+         KEY = Noise burst (NOISE SC mode)
+    │
+    ▼
+[ MIX ] ──────────── Blend with stored Dry copy
+    │
+    ▼
+OUTPUT
+      </div>
+
+      <div class="callout">
+        <strong>IMPORTANT:</strong> The gate acts on the fully processed wet signal — after all the destruction has happened. In NOISE SC mode, the noise burst amplitude is the key signal that decides when the gate opens and closes, but the gate itself always applies to the entire signal.
+      </div>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR NOTES ON WHY THE SIGNAL CHAIN IS ORDERED THIS WAY. For example: why saturation goes before bit reduction, and what that does to the harmonic character vs. saturating after. ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 03 · THE FADERS ─────────────────────────────────────────────── -->
+    <div class="section" id="s3">
+      <div class="section-header">
+        <span class="section-num">FILE 03</span>
+        THE FADERS — SAMPLER SPEED &amp; PITCH
+      </div>
+      <hr class="section-rule">
+
+      <p>Two vertical faders dominate the centre of the panel. They look similar. They do very different things.</p>
+
+      <div class="control-block">
+        <div class="ctrl-name">SAMPLER SPEED</div>
+        <div class="ctrl-meta">RANGE: -24 to +24 semitones  |  DEFAULT: 0  |  GLIDE: SPD GLIDE</div>
+        <p>This is the varispeed fader. Classic hardware samplers locked pitch and time together — tuning a sound up meant speeding up the playback clock. You couldn't change one without the other. Dust 12.47 recreates this relationship as a core processing mode.</p>
+        <p>Move the SAMPLER SPEED fader up and the audio plays faster and higher. Move it down and it slows and drops in pitch. A 12-semitone move doubles or halves the playback speed.</p>
+        <p>This means that short sounds get shorter when pitched up, and longer when pitched down. On drums, this gives transients a different character at every tuning — the attack on a snare sounds harder and tighter at +7 than at -7. This is not a side effect. It is the sound.</p>
+        <p>The SAMPLER SPEED fader is the primary character control of the plugin. Even small movements — a semitone or two — can completely change the energy of a drum loop.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">PITCH</div>
+        <div class="ctrl-meta">RANGE: -24 to +24 semitones  |  DEFAULT: 0  |  GLIDE: PCH GLIDE</div>
+        <p>The PITCH fader uses a modern pitch shifting algorithm. Pitch changes but time does not. A kick drum pitched down 7 semitones stays the same length. This is the tuning tool — use it to lock samples to a key, to create detuned layers, or to shift a loop to sit in a different part of the frequency spectrum without changing its rhythmic feel.</p>
+        <p>Used in combination with SAMPLER SPEED, you can tune the overall character of the signal (with SPEED) then fine-correct the pitch without affecting the texture (with PITCH). Or use them to opposite effect — speed the machine up while pitching it back down, creating a tighter, more aggressive signal that sits at the same pitch as the original.</p>
+      </div>
+
+      <h3>USING THEM TOGETHER</h3>
+      <p>The SNAP button links both faders so they move together in equal measure. S.LINK links the sampler's current speed state to what the pitch shifter is compensating for — useful for complex re-tuning chains. S+P LINK ties speed and pitch movement, useful for parallel shift experiments.</p>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR PERSONAL NOTES ON HOW YOU USE THE FADERS. What combinations do you reach for? What sounds have surprised you? ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 04 · GRID MODE ─────────────────────────────────────────────── -->
+    <div class="section" id="s4">
+      <div class="section-header">
+        <span class="section-num">FILE 04</span>
+        GRID MODE — SPEED RATIO LOCK
+      </div>
+      <hr class="section-rule">
+
+      <p>Engage the <strong>GRID</strong> button above the SAMPLER SPEED fader to activate ratio snap mode. When GRID is on, the fader no longer moves freely — it locks to musically and rhythmically meaningful speed ratios.</p>
+
+      <p>The snap points are:</p>
+
+      <table>
+        <tr><th>POSITION</th><th>RATIO</th><th>MUSICAL EQUIVALENT</th><th>WHAT HAPPENS</th></tr>
+        <tr><td>-24 st</td><td>1/4x</td><td>2 octaves down</td><td>Plays at quarter speed. Extremely slow and deep. Textures become pads.</td></tr>
+        <tr><td>-12 st</td><td>1/2x</td><td>1 octave down</td><td>Half speed. The classic "slowed and chopped" territory.</td></tr>
+        <tr><td>-7 st</td><td>~2/3x</td><td>Perfect 5th down</td><td>Subtle slow — sounds lazier and deeper without obvious halftime feel.</td></tr>
+        <tr><td>0 st</td><td>1x</td><td>Original</td><td>Unity. No speed change.</td></tr>
+        <tr><td>+7 st</td><td>~3/2x</td><td>Perfect 5th up</td><td>Slightly sped up. More energy, brighter, tighter transients.</td></tr>
+        <tr><td>+12 st</td><td>2x</td><td>1 octave up</td><td>Double speed. Loops play in half the time. Classic chop territory.</td></tr>
+        <tr><td>+24 st</td><td>4x</td><td>2 octaves up</td><td>Quadruple speed. Extremely tight and percussive.</td></tr>
+      </table>
+
+      <p>When GRID is active, the fader displays these ratios as large markers with labels. Dragging the fader between positions snaps directly to the nearest ratio point. To move to the next ratio, simply drag past the midpoint between two positions.</p>
+
+      <div class="callout">
+        <strong>NOTE:</strong> Because this is varispeed, all speed ratio changes also affect pitch. A 1/2x speed sound will also be one octave lower. Use the PITCH fader to compensate if you want the time change without the pitch change — or leave it and embrace the shift.
+      </div>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR NOTES ON GRID MODE. When do you use it? Which ratios do you land on most? Any interesting combinations with the gate? ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 05 · MUSICAL MODE ──────────────────────────────────────────── -->
+    <div class="section" id="s5">
+      <div class="section-header">
+        <span class="section-num">FILE 05</span>
+        MUSICAL MODE — PITCH INTERVAL SNAP
+      </div>
+      <hr class="section-rule">
+
+      <p>Classic hardware samplers had no musical pitch mode. Every tuning move was freeform — you listened and adjusted by ear. Dust 12.47 adds something those machines never had: the ability to lock the PITCH fader to musical intervals so that every position you land on is harmonically correct. This is a Sound Detective original feature built on top of the vintage-inspired degradation engine.</p>
+
+      <p>Engage the <strong>MUSICAL</strong> button above the PITCH fader. The fader now snaps to a set of intervals built around octaves, perfect fourths, and perfect fifths — the most harmonically powerful relationships in Western music.</p>
+
+      <table>
+        <tr><th>POSITION</th><th>INTERVAL</th><th>MUSICAL CHARACTER</th></tr>
+        <tr><td>-24 st</td><td>2 Octaves Down</td><td>Deep sub territory. A bass note dropped two octaves becomes a felt vibration.</td></tr>
+        <tr><td>-19 st</td><td>8va + P5 Down</td><td>Octave plus perfect fifth below. Dark and rooted.</td></tr>
+        <tr><td>-17 st</td><td>8va + P4 Down</td><td>Octave plus perfect fourth below. Mournful, minor feeling.</td></tr>
+        <tr><td>-12 st</td><td>Octave Down</td><td>One octave below. Same note, lower register.</td></tr>
+        <tr><td>-7 st</td><td>Perfect 5th Down</td><td>A fourth below the root when inverted. Stable and open.</td></tr>
+        <tr><td>-5 st</td><td>Perfect 4th Down</td><td>A fifth below the root when inverted. Strong and grounded.</td></tr>
+        <tr><td>0 st</td><td>Root (Unison)</td><td>No pitch change. The source material unchanged.</td></tr>
+        <tr><td>+5 st</td><td>Perfect 4th Up</td><td>Lifts the material. Creates tension against a root note.</td></tr>
+        <tr><td>+7 st</td><td>Perfect 5th Up</td><td>The most consonant interval after the octave. Powerful harmony.</td></tr>
+        <tr><td>+12 st</td><td>Octave Up</td><td>One octave above. Brighter register, same note.</td></tr>
+        <tr><td>+17 st</td><td>8va + P4 Up</td><td>High and bright with strong directional pull.</td></tr>
+        <tr><td>+19 st</td><td>8va + P5 Up</td><td>Very high. Almost strained. Interesting on vocals.</td></tr>
+        <tr><td>+24 st</td><td>2 Octaves Up</td><td>Maximum pitch. Only works on sustained or slow-attack material.</td></tr>
+      </table>
+
+      <p>When MUSICAL is off, the fader reverts to completely free movement — full semitone resolution across the -24 to +24 range, with the standard tick marks returning.</p>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR PERSONAL NOTES ON MUSICAL MODE. Which intervals do you reach for most? Have you found any combinations with the SAMPLER SPEED that create something unexpected? ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 06 · DUST ───────────────────────────────────────────────────── -->
+    <div class="section" id="s6">
+      <div class="section-header">
+        <span class="section-num">FILE 06</span>
+        THE DUST — BIT DEPTH, SAMPLE RATE, DRIVE &amp; CRUNCH
+      </div>
+      <hr class="section-rule">
+
+      <p>These four controls are the core of the plugin's identity. They define where on the spectrum between "clean digital" and "destroyed" the signal lives.</p>
+
+      <div class="control-block">
+        <div class="ctrl-name">BIT DEPTH</div>
+        <div class="ctrl-meta">RANGE: 4 to 16 bits  |  CLASSIC 12-BIT REFERENCE: 12 bits  |  SHORTCUT: 12/26k</div>
+        <p>Bit depth controls how many amplitude steps are available to represent the audio signal. At 16-bit, you have 65,536 possible values — effectively transparent. At 12-bit, you have 4,096 values. At 4-bit, you have 16.</p>
+        <p>As bit depth decreases, two things happen: quantisation noise increases (a grainy, gritty texture appears), and loud signals start to clip harder at their peaks. The kick drum quantises differently from the snare, and the interplay of those quantisation artefacts at different amplitudes creates texture that no clean digital sampler can produce.</p>
+        <p><strong>12 bits</strong> is the classic reference point — the sweet spot where grit and musicality meet. Below 12, the character becomes more aggressive and obvious. At 8 bits you enter lo-fi territory. At 4 bits the signal is barely recognisable but can create something extraordinary on the right material.</p>
+        <p>Above 12 bits, the plugin gets cleaner. At 16 bits, the bit reduction is essentially inaudible, and you are using the plugin purely for its other processing stages.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">SAMPLE RATE</div>
+        <div class="ctrl-meta">RANGE: 4,000 Hz to 44,100 Hz  |  CLASSIC LOW-CLOCK REFERENCE: ~26,040 Hz  |  SHORTCUT: 12/26k</div>
+        <p>Sample rate reduction works by downsampling the signal to a lower clock rate before upsampling it back to your session rate. Content above half the reduced sample rate (the Nyquist frequency) is not filtered before downsampling — this creates aliasing, where high-frequency content folds back into the audible spectrum as new, inharmonic frequencies.</p>
+        <p><strong>~26,040 Hz</strong> is the classic 12-bit sampler low-clock reference. At this setting, any content above 13,020 Hz aliases. On a drum loop, the hi-hats become slightly impure — the aliasing adds intermodulation between cymbal frequencies that sounds like the cymbal is being processed by something analogue and imperfect. This is the sound.</p>
+        <p>As you reduce the sample rate below 26k, aliasing becomes more pronounced and moves into the midrange. At very low rates (under 8,000 Hz), the audio becomes telephone-quality or worse — but the aliasing patterns create entirely new musical content that can be fascinating as a texture layer.</p>
+        <p>The <strong>12/26k</strong> button snaps both BIT DEPTH and SAMPLE RATE to the classic 12-bit / ~26k reference point simultaneously.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">DRIVE</div>
+        <div class="ctrl-meta">RANGE: 0 to 24 dB  |  DEFAULT: 0  |  POSITION: Before converters</div>
+        <p>DRIVE applies soft saturation before the bit reduction and sample rate stages. This is critical to the character of the plugin because saturation before a bit crusher changes how quantisation noise behaves — louder harmonics from saturation hit the quantiser at different amplitudes, changing which quantisation steps they land on.</p>
+        <p>Low DRIVE values add warmth and density. Higher values push the signal into visible saturation — peaks flatten, transients round slightly, and the overall signal becomes thicker before it hits the converters. On drums, moderate drive tightens the low end. On sustained material, it adds harmonic texture that makes bit reduction sound less clinical and more organic.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">CRUNCH</div>
+        <div class="ctrl-meta">RANGE: 0 to 100%  |  DEFAULT: 0  |  TYPE: Asymmetric harmonic distortion</div>
+        <p>CRUNCH adds asymmetric waveshaping — a form of distortion that introduces odd and even harmonics in unequal proportions, similar to the behaviour of an overdriven output transformer or analogue tape saturation. Unlike DRIVE (which is symmetric), asymmetric distortion creates a DC component and introduces second-order harmonics that sit an octave above the fundamental.</p>
+        <p>At low values, CRUNCH adds warmth and slight thickness. At higher values, the signal begins to sound "crushed" in a way that is distinct from both bit reduction and drive — slightly broken, slightly analogue, slightly wrong in the best way. CRUNCH at high values on hi-hats creates a metallic smear that can sit under a mix without competing with it.</p>
+      </div>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR NOTES ON THE DUST SECTION. What are your go-to bit depth and sample rate combinations? Do you ever use extreme settings? What source material surprises you with the dust section? ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 07 · JITTER & NOISE ────────────────────────────────────────── -->
+    <div class="section" id="s7">
+      <div class="section-header">
+        <span class="section-num">FILE 07</span>
+        JITTER &amp; NOISE
+      </div>
+      <hr class="section-rule">
+
+      <div class="control-block">
+        <div class="ctrl-name">JITTER</div>
+        <div class="ctrl-meta">RANGE: 0 to 100%  |  DEFAULT: 5%</div>
+        <p>Jitter is instability in the sample clock — the timing of when each sample is read varies by a tiny amount. In a perfect digital system, samples are read at exactly regular intervals. In analogue hardware, the clock oscillator drifts slightly due to temperature, electromagnetic interference, and component tolerances.</p>
+        <p>The sonic effect of jitter is subtle but important: it adds a slight randomness to the sampling process that feels "alive" compared to a perfectly clocked system. At low values (the default 5%), JITTER is barely audible — it simply removes the "too perfect" quality that can make digital processing feel sterile. At higher values, the effect becomes an effect — a slightly wavering, unstable quality that works particularly well on sustained material or vocals.</p>
+        <p>On drums, moderate jitter (10–30%) can add a micro-groove feel where the transients have a slight human-like inconsistency. Beyond 50%, it becomes an audible modulation — use at your own risk and discretion.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">NOISE</div>
+        <div class="ctrl-meta">RANGE: 0 to 100%  |  DEFAULT: 0  |  TYPE: Broadband noise floor</div>
+        <p>NOISE adds a broadband analogue-style noise floor to the signal. At low values it adds subtle presence and warmth — the kind of barely-audible breath that vinyl records have, which makes silence feel like something rather than nothing.</p>
+        <p>At higher values, the noise becomes part of the texture. A snare hit surrounded by noise has a different quality than the same snare in silence — the noise provides context and density. This is why many producers deliberately add noise to otherwise clean digital recordings.</p>
+        <p>NOISE becomes especially powerful when combined with the GATE. By setting the gate threshold correctly, you can gate the noise so it only appears between hits, or only during hits — creating rhythmic texture rather than a constant hiss. See the GATE section for details.</p>
+        <p>NOISE also interacts with NOISE SC mode, where the noise burst amplitude itself becomes the signal that drives the gate. See Section 08.</p>
+      </div>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR NOTES ON JITTER AND NOISE. Do you use noise subtly for warmth, or aggressively as a texture? What is your favourite NOISE + GATE combination? ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 08 · GATE ──────────────────────────────────────────────────── -->
+    <div class="section" id="s8">
+      <div class="section-header">
+        <span class="section-num">FILE 08</span>
+        THE GATE — THRESHOLD, RELEASE &amp; NOISE SC
+      </div>
+      <hr class="section-rule">
+
+      <p>The gate is a downward expander that silences the signal when its level drops below a threshold. Unlike a standard gate on a channel strip, the Dust 12.47 gate operates on the fully processed wet signal — after all the bit reduction, noise, and filtering has happened. What the gate hears is the destroyed version of your signal, not the original.</p>
+
+      <div class="control-block">
+        <div class="ctrl-name">THRESHOLD</div>
+        <div class="ctrl-meta">RANGE: -60 dB to 0 dB  |  DEFAULT: -60 dB (bypass)</div>
+        <p>The level at which the gate opens. When the signal (or key signal in NOISE SC mode) rises above this threshold, the gate opens and audio passes through. When it falls below, the gate closes.</p>
+        <p>At -60 dB (the default), the gate is effectively bypassed — the threshold is so low that almost any signal will open it. As you raise the threshold toward 0 dB, the gate becomes more aggressive: only louder transients will open it, and quieter material will be gated out.</p>
+        <p>Setting the threshold in the -30 to -20 dB range is a good starting point for rhythmic gating on drums. At -10 dB, only the loudest peaks will trigger the gate.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">RELEASE</div>
+        <div class="ctrl-meta">RANGE: 10 ms to 500 ms  |  DEFAULT: 80 ms</div>
+        <p>How long the gate takes to close after the signal drops below threshold. The attack is fixed at approximately 2ms — fast enough to let transients through without choking them.</p>
+        <p>Short release times (10–30ms) create a staccato, chopped effect — the gate slams shut almost immediately after each transient. Medium release times (80–150ms) let the tail of the sound breathe before closing. Long release times (300–500ms) create a gate that stays open for a long time, only closing in the spaces between beats.</p>
+        <p>Release is one of the most important controls for setting the rhythmic character of the gated signal. Try automating it.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">NOISE SC (Noise Sidechain)</div>
+        <div class="ctrl-meta">TYPE: Toggle  |  DEFAULT: Off</div>
+        <p>When NOISE SC is off, the gate's key signal is the dry (pre-processing) input signal. The gate opens when your original audio is loud and closes when it is quiet — the standard behaviour.</p>
+        <p>When NOISE SC is on, the key signal changes to the noise burst generated by the NOISE control. The gate now opens and closes based on the random amplitude of the noise floor — not based on your input signal at all.</p>
+        <p>The effect is that the gate is no longer rhythmically locked to your material. Instead, it opens and closes in a pattern determined by the statistical distribution of the noise bursts. Higher NOISE amounts create more frequent bursts and therefore more gate openings. Lower NOISE amounts create sparser triggering.</p>
+        <p>The result is organic, unpredictable rhythmic gating that evolves over time. No two bars will gate in exactly the same way. Applied to the full signal (which is what always happens — the gate acts on everything, just triggered by the noise), NOISE SC creates a textural variation that is impossible to recreate with a standard MIDI-triggered gate. It sounds alive because its timing reference is alive.</p>
+      </div>
+
+      <div class="callout">
+        <strong>CREATIVE NOTE:</strong> NOISE SC gating with a short release and moderate threshold is one of the most distinctive sounds in the plugin. Try it on a pad or sustained bass — the noise-triggered gating creates a stuttering, breathing texture that sits underneath the mix without drawing attention to itself.
+      </div>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR NOTES ON THE GATE. What combinations do you use most? Have you found any specific THRESHOLD + RELEASE + NOISE AMOUNT combinations that work well on specific instrument types? ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 09 · SHAPE ─────────────────────────────────────────────────── -->
+    <div class="section" id="s9">
+      <div class="section-header">
+        <span class="section-num">FILE 09</span>
+        SHAPE — HIGH PASS, LOW PASS &amp; TONE
+      </div>
+      <hr class="section-rule">
+
+      <p>The shape section applies filtering to the wet signal before it reaches the gate and the final mix blend. These are not surgical EQ tools — they are character filters that define the spectral boundaries of the processed signal.</p>
+
+      <div class="control-block">
+        <div class="ctrl-name">HIGH PASS</div>
+        <div class="ctrl-meta">RANGE: 20 Hz to 2,000 Hz  |  DEFAULT: 20 Hz</div>
+        <p>Removes content below the set frequency. At 20 Hz, it is essentially flat — a safety filter that prevents DC content. As you raise it, the low end is progressively removed from the processed signal.</p>
+        <p>This is useful for keeping the bit-crushed signal from muddying up the low end of your mix, especially when combined with the dry signal at the MIX stage. You can have a bitcrushed mid and high signal blended over a clean dry low end — the HIGH PASS removes the low end from the wet signal so the dry signal's low end comes through cleanly.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">LOW PASS</div>
+        <div class="ctrl-meta">RANGE: 1,000 Hz to 20,000 Hz  |  DEFAULT: 20,000 Hz</div>
+        <p>Removes content above the set frequency. At 20 kHz, it is transparent — the full spectrum passes through. Reducing the low pass creates a muffled, lo-fi character independent of the sample rate reduction stage.</p>
+        <p>Note that sample rate reduction already acts as an aliasing low pass (content above the Nyquist folds back rather than being removed), so this filter acts differently from the Nyquist roll-off — it is a clean cut rather than an alias. Use it to control the brightness of the processed signal.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">TONE</div>
+        <div class="ctrl-meta">RANGE: -12 dB to +12 dB  |  DEFAULT: 0  |  TYPE: High shelf tilt</div>
+        <p>A high-frequency shelf that either brightens or darkens the processed signal. Unlike the low pass (which is a cut), TONE is a tilt — reducing TONE rolls off the high end gently while pushing TONE boosts it, adding presence and air.</p>
+        <p>TONE is useful for compensating for the natural darkening that comes from sample rate reduction and bit crushing. A small TONE boost (+2 to +4 dB) can restore some of the clarity that the converters removed, creating a sound that feels both vintage and present.</p>
+      </div>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR NOTES ON SHAPING. Do you tend to use the high pass to clean up the low end, or do you use it more aggressively? ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 10 · MACHINE DRIFT ─────────────────────────────────────────── -->
+    <div class="section" id="s10">
+      <div class="section-header">
+        <span class="section-num">FILE 10</span>
+        MACHINE DRIFT — DRIFT, MOTION &amp; STEREO
+      </div>
+      <hr class="section-rule">
+
+      <p>Machine Drift is the plugin's simulation of analogue hardware aging. Real hardware doesn't behave the same way from day to day, or even from hour to hour. Capacitors age. Temperature changes affect oscillator frequencies. The noise floor shifts slightly. Machine Drift captures this organic instability.</p>
+
+      <div class="control-block">
+        <div class="ctrl-name">DRIFT</div>
+        <div class="ctrl-meta">RANGE: 0 to 100%  |  DEFAULT: 15%</div>
+        <p>The amount of drift applied to drive level, sample rate, and tone simultaneously. At 0%, the plugin behaves the same way every time — a perfectly calibrated machine. At higher values, these parameters wander around their set values in slow, smooth movements that are correlated but not identical.</p>
+        <p>Moderate drift (10–30%) makes the plugin feel organic and alive without obviously modulating. High drift values (50%+) create audible slow modulation — useful as an effect in its own right.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">MOTION</div>
+        <div class="ctrl-meta">RANGE: 0 to 100%  |  DEFAULT: 25%</div>
+        <p>The speed at which the drift wanders. Low MOTION values produce very slow, almost imperceptible movement — like a machine slowly warming up over many minutes. High MOTION values produce faster wobble — useful for tremolo-like effects at extreme settings.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">STEREO</div>
+        <div class="ctrl-meta">RANGE: 0 to 100%  |  DEFAULT: 20%</div>
+        <p>Controls how independently the left and right channels drift. At 0%, both channels drift identically — the stereo image is stable but the overall signal drifts together. At 100%, left and right drift completely independently — they may be at different drive levels, different sample rates, different tone settings at any given moment.</p>
+        <p>High STEREO values create a wide, unstable stereo image that sounds genuinely like two independently aging machines playing in sync. On stereo material, this can create a sense of width and movement that is almost impossible to replicate with conventional stereo processing.</p>
+      </div>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR NOTES ON MACHINE DRIFT. What DRIFT + MOTION combinations do you use? Do you ever use STEREO at high values as a creative effect? ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 11 · LEVEL ─────────────────────────────────────────────────── -->
+    <div class="section" id="s11">
+      <div class="section-header">
+        <span class="section-num">FILE 11</span>
+        LEVEL — MIX, OUTPUT &amp; DELTA MODE
+      </div>
+      <hr class="section-rule">
+
+      <div class="control-block">
+        <div class="ctrl-name">MIX</div>
+        <div class="ctrl-meta">RANGE: 0% to 100%  |  DEFAULT: 100%</div>
+        <p>The wet/dry blend. At 100%, only the processed signal is output. At 0%, only the dry signal passes through. At 50%, both signals are blended equally.</p>
+        <p>Parallel processing is one of the most powerful ways to use Dust 12.47. Run the destruction hard — extreme bit reduction, aggressive noise, high drive — but blend it back at 30–40% against the clean dry signal. The result is a signal that has density and character but retains the clarity and dynamics of the original. Classic producers achieved this by accident, routing audio through imperfect hardware with no bypass. You are doing it deliberately, with full control.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">OUTPUT</div>
+        <div class="ctrl-meta">RANGE: -24 dB to +12 dB  |  DEFAULT: 0 dB</div>
+        <p>The final output level after the wet/dry blend. Use this to compensate for level changes introduced by the processing chain. Aggressive bit reduction and saturation can significantly change the perceived loudness of a signal — OUTPUT brings it back to a comparable level to the dry signal for fair comparison and consistent mixing.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">DELTA MODE</div>
+        <div class="ctrl-meta">TYPE: Toggle  |  DEFAULT: Off  |  LOCATION: Top bar</div>
+        <p>Delta mode outputs the difference between the wet and dry signal — the processing itself, in isolation. Mathematically: <em>output = wet − dry</em>. When DELTA is on, you hear only what the plugin is adding or removing. When DELTA is off, you hear the normal processed signal.</p>
+        <p>Delta mode has several uses. The most important is diagnostic: by listening to only what the plugin is doing, you can precisely judge the character of the processing without it being obscured by the source material. If the delta signal sounds like noise and grit, that is what the plugin is adding to your signal. If it sounds like a filtered version of the source, that is what is being shaped.</p>
+        <p>Delta mode is also a creative tool. The difference signal can be extracted and routed independently if you print the delta output to a separate track — giving you only the "dust" without the source material.</p>
+      </div>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR NOTES ON MIX AND DELTA. Do you use parallel processing often? What MIX percentages do you gravitate towards for different material types? ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 12 · GLIDE ─────────────────────────────────────────────────── -->
+    <div class="section" id="s12">
+      <div class="section-header">
+        <span class="section-num">FILE 12</span>
+        GLIDE CONTROLS
+      </div>
+      <hr class="section-rule">
+
+      <div class="control-block">
+        <div class="ctrl-name">SPD GLIDE (Sampler Speed Glide)</div>
+        <div class="ctrl-meta">RANGE: 0 to 100  |  DEFAULT: 50</div>
+        <p>Controls how fast the SAMPLER SPEED parameter reaches its target value when you move the fader. At 0, the speed change is instantaneous — the pitch and time jump directly to the new position. At higher values, the engine smoothly interpolates to the new speed, creating a pitch bend or gradual time stretch effect.</p>
+        <p>High SPD GLIDE with slow fader moves creates the effect of a record player coming up to speed or winding down — the machine gradually accelerating or decelerating. Automate the fader for controlled pitch-bend effects. Combined with GRID mode, you can create smooth transitions between speed ratios.</p>
+      </div>
+
+      <div class="control-block">
+        <div class="ctrl-name">PCH GLIDE (Pitch Glide)</div>
+        <div class="ctrl-meta">RANGE: 0 to 100  |  DEFAULT: 40</div>
+        <p>The same concept applied to the PITCH fader. High PCH GLIDE values create smooth pitch portamento when moving the fader. In MUSICAL mode, glide creates a smooth transition between interval snap points — the pitch slides from a perfect fifth to an octave, for example, rather than jumping directly.</p>
+      </div>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR NOTES ON GLIDE. Do you automate the faders often? What are your go-to glide settings for expressive pitch movement? ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 13 · PRESETS ───────────────────────────────────────────────── -->
+    <div class="section" id="s13">
+      <div class="section-header">
+        <span class="section-num">FILE 13</span>
+        PRESETS — FILED EVIDENCE
+      </div>
+      <hr class="section-rule">
+
+      <p>The Dust 12.47 ships with fifteen factory presets. Each is a starting point, not a destination. The plugin was designed to be moved — treat every preset as a conversation opener.</p>
+
+      <table>
+        <tr><th>PRESET</th><th>CHARACTER</th><th>STARTING POINT FOR</th></tr>
+        <tr><td>Classic 12/26</td><td>Classic 12-bit / ~26k reference. Minimal drive.</td><td>Any drum material. The baseline vintage texture.</td></tr>
+        <tr><td>Hard Grit</td><td>Aggressive bit reduction, high drive, moderate crunch.</td><td>Kicks and snares that need weight and density.</td></tr>
+        <tr><td>Lo-Fi Warmth</td><td>Moderate bit depth, high noise, long gate release.</td><td>Loops and samples that need a vintage feel.</td></tr>
+        <tr><td>Vinyl Press</td><td>High noise, filtered lows, gated noise SC.</td><td>Adding vinyl character to clean digital material.</td></tr>
+        <tr><td>Pitch Drop</td><td>Speed fader at -7 (perfect 5th down), moderate glide.</td><td>Pitched-down loop processing. Slow and heavy.</td></tr>
+        <tr><td>Double Time</td><td>Speed fader at +12 (2x). Tight release gate.</td><td>Chopped and accelerated loop processing.</td></tr>
+        <tr><td>Telephone</td><td>Extreme high and low pass, low bit depth.</td><td>Filtered, lo-fi vocal processing.</td></tr>
+        <tr><td>Drift Machine</td><td>High drift and stereo divergence, moderate motion.</td><td>Wide, unstable stereo textures. Pad processing.</td></tr>
+        <tr><td>Gate Rhythm</td><td>Noise SC gate, moderate noise, medium threshold.</td><td>Rhythmic gating exploration starting point.</td></tr>
+        <tr><td>Subtle Dust</td><td>Light bit reduction, low drive, minimal noise.</td><td>Adding character without obvious processing.</td></tr>
+        <tr><td>Broken Gear</td><td>High jitter, extreme sample rate reduction, high stereo.</td><td>Damaged, unstable sounds. Experimental.</td></tr>
+        <tr><td>Mix Parallel</td><td>Aggressive processing, MIX at 35%.</td><td>Parallel destruction over a clean signal.</td></tr>
+        <tr><td>Sub Drop</td><td>Speed at -24 (2 octaves down), extreme low pass.</td><td>Sub-bass creation from higher-pitched material.</td></tr>
+        <tr><td>Crispy Hi</td><td>Moderate sample rate, high tone, fast gate.</td><td>Brightened and gated high-frequency material.</td></tr>
+        <tr><td>Full Send</td><td>Maximum settings across the board. Maximally destroyed.</td><td>Extreme processing. Unrecognisable territory.</td></tr>
+      </table>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR PERSONAL NOTES ON YOUR FAVOURITE PRESETS. Which ones do you use the most? Which ones are most misunderstood? Are there any specific things you want users to try with each? ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 14 · FIELD TECHNIQUES ──────────────────────────────────────── -->
+    <div class="section" id="s14">
+      <div class="section-header">
+        <span class="section-num">FILE 14</span>
+        CREATIVE FIELD TECHNIQUES
+      </div>
+      <hr class="section-rule">
+
+      <p>These are operational procedures developed through field use. They are not the only ways to use the Dust 12.47. They are evidence of what the unit is capable of.</p>
+
+      <h3>TECHNIQUE 01 — THE PARALLEL DESTRUCTION</h3>
+      <p>Run the plugin with aggressive settings — 8-bit, 18kHz sample rate, high drive, high crunch — but set MIX to 25–35%. The destroyed signal sits under the dry signal, adding density and texture without compromising the transient clarity of the original. This is how you make something sound dirty without making it sound bad.</p>
+
+      <h3>TECHNIQUE 02 — THE MUSICAL DROP</h3>
+      <p>Engage MUSICAL mode on the pitch fader. Set the pitch to -12 (one octave down). Use GRID mode on the speed fader and set it to 1/2x. You are now one octave down in pitch (from the pitch shifter) and half speed (from the varispeed). The result is two octaves lower in total but with the varispeed character of the original machine. Try automating the pitch fader to jump between -12 and -7 (octave and perfect fifth down) on the beat.</p>
+
+      <h3>TECHNIQUE 03 — NOISE SC AS A MODULATOR</h3>
+      <p>Set NOISE to 40–60%. Set threshold to -25 dB. Set release to 30ms. Engage NOISE SC. The gate will now open and close in response to the statistical distribution of the noise bursts. Apply this to a pad or sustained bass. The signal will breathe and stutter in a way that has an organic, living quality. No two bars will be identical. This is not a glitch effect — it is a texture effect.</p>
+
+      <h3>TECHNIQUE 04 — DRIFT AS A CHORUS</h3>
+      <p>Set DRIFT to 30–50%, MOTION to 60%, STEREO to 80%. The left and right channels are now processing the audio through slightly different simulated hardware states at any given moment. The result is a wide stereo image with slow chorus-like movement that sounds nothing like a chorus — it sounds like two machines. Use this on mono material and enjoy the widening.</p>
+
+      <h3>TECHNIQUE 05 — DELTA LAYERING</h3>
+      <p>Engage DELTA mode and record the output to a new track. You now have a recording of only the processing — the dust, the grit, the gate artifacts — without the source material. Layer this under the original signal at a low level (-12 to -18 dB). The result is a subliminal texture that adds depth without being identifiable as processing.</p>
+
+      <h3>TECHNIQUE 06 — THE GRID CHOP</h3>
+      <p>Engage GRID on the speed fader. Set the release gate to 20ms and threshold to -20dB. Now automate the speed fader to jump between 1x and 2x on the beat. At 2x speed, the audio plays in double time through the gate's tight release. The gate chops the tails. This is a rhythmic production technique — you are manually creating chopped loop variations by bouncing between speed ratios.</p>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR OWN TECHNIQUES GO HERE. What have you discovered in production that you want users to know about? What unexpected combinations have surprised you? ]</p>
+      </div>
+    </div>
+
+    <!-- ─── 15 · SPECIFICATIONS ─────────────────────────────────────────── -->
+    <div class="section" id="s15">
+      <div class="section-header">
+        <span class="section-num">FILE 15</span>
+        SPECIFICATIONS
+      </div>
+      <hr class="section-rule">
+
+      <table>
+        <tr><th>PARAMETER</th><th>SPECIFICATION</th></tr>
+        <tr><td>Formats</td><td>VST3, AU (Audio Units)</td></tr>
+        <tr><td>Platform</td><td>macOS (Apple Silicon + Intel), Windows (VST3)</td></tr>
+        <tr><td>Bit Depth Processing</td><td>32-bit floating point internal</td></tr>
+        <tr><td>Supported Sample Rates</td><td>44,100 Hz – 192,000 Hz host rate</td></tr>
+        <tr><td>Latency</td><td>Zero latency (no look-ahead)</td></tr>
+        <tr><td>Channels</td><td>Stereo (2-in / 2-out)</td></tr>
+        <tr><td>Gate Attack</td><td>Fixed ~2ms</td></tr>
+        <tr><td>Gate Release</td><td>10–500ms (user controlled)</td></tr>
+        <tr><td>Bit Depth Range</td><td>4–16 bits</td></tr>
+        <tr><td>Sample Rate Range</td><td>4,000–44,100 Hz (internal reduction)</td></tr>
+        <tr><td>Pitch Range</td><td>±24 semitones (both faders)</td></tr>
+        <tr><td>GUI Size</td><td>900 × 548 px</td></tr>
+        <tr><td>Presets</td><td>15 factory presets</td></tr>
+        <tr><td>Manufacturer</td><td>Sound Detective / Detective 47</td></tr>
+        <tr><td>Version</td><td>2.1</td></tr>
+      </table>
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — ADD ANY ADDITIONAL TECHNICAL NOTES HERE. System requirements, known DAW compatibility notes, installation instructions. ]</p>
+      </div>
+    </div>
+
+    <!-- ─── PAGE BREAK ──────────────────────────────────────────────────── -->
+    <hr class="page-break">
+
+    <!-- ─── CLOSING STATEMENT ──────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-header">
+        <span class="section-num">///</span>
+        CLOSING STATEMENT FROM DETECTIVE 47
+      </div>
+      <hr class="section-rule">
+
+      <div class="case-note">
+        <p class="placeholder">[ DETECTIVE 47 — YOUR PERSONAL CLOSING MESSAGE TO THE USER. This is the last thing they read. What do you want them to leave with? What is the spirit of this plugin? ]</p>
+      </div>
+
+      <p style="margin-top:18px; font-size:10px; color: var(--dim); letter-spacing: 1px;">
+        Evidence processed. Case file complete. The machine is yours now.
+      </p>
+    </div>
+
+  </div><!-- /content -->
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!--  FOOTER                                                               -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="doc-footer">
+    <div class="footer-id">D47-001 · DUST 12.47 · REV 2.1 · SOUND DETECTIVE</div>
+    <div class="footer-sig">thesounddetective.com</div>
+  </div>
+
+</div><!-- /document -->
+
+</body>
+</html>
