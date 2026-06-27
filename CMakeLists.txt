@@ -20,3 +20,4 @@ FetchContent_MakeAvailable(JUCE)
 # Plugins
 # ---------------------------------------------------------------------------
 add_subdirectory(Plugins/Dust1200)
+add_subdirectory(Plugins/Backtrace)

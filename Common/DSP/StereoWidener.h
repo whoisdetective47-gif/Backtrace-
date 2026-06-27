@@ -43,6 +43,10 @@ public:
 
     void setWidth(float pct) { width.setTargetValue(std::clamp(pct * 0.01f, 0.0f, 1.0f)); }
 
+    // Snap width to its value with no smoothing ramp — for OFFLINE renders where the
+    // whole buffer is processed at once and the 20 ms ramp would mis-width the start.
+    void setWidthImmediate(float pct) { width.setCurrentAndTargetValue(std::clamp(pct * 0.01f, 0.0f, 1.0f)); }
+
     void reset()
     {
         for (auto& a : ap) a.reset();
