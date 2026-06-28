@@ -80,7 +80,7 @@ public:
     {
         const int n  = buffer.getNumSamples();
         const int ch = juce::jmin(channels, buffer.getNumChannels());
-        if (n <= 0 || ch <= 0) return;
+        if (n <= 0 || ch <= 0 || dryDelay.getNumSamples() <= 0) return;   // not prepared → leave audio untouched
 
         const bool wet = ready.load();
         if (wet)

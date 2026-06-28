@@ -510,6 +510,7 @@ private:
     std::atomic<float> liveDry { 1.0f };         // Dry Amount (0 = Dry Mute)
     std::atomic<bool>  liveIRRequested { false }; // worker should rebuild the preverb IR
     std::atomic<int>   liveLatencyApplied { -1 }; // last latency pushed to the host
+    std::atomic<bool>  dspPrepared { false };     // true only after prepareToPlay — gates worker DSP use
 
     std::vector<PresetEntry> presets;
     int  currentPreset = 0;

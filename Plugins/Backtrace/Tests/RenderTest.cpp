@@ -154,6 +154,34 @@ int main()
 
     int landing; double sr;
 
+    // ---- 0. CRASH GUARD: host restores a Live-mode session BEFORE prepareToPlay --------
+    // Cubase can call setStateInformation before prepareToPlay; the live-IR rebuild must
+    // NOT touch unprepared reverb objects / convolution. (This reproduced a session-open
+    // crash — the test process would die here without the dspPrepared guard.)
+    std::printf("0. State-restore-before-prepare crash guard:\n");
+    {
+        juce::MemoryBlock liveState;
+        { BacktraceProcessor src; src.setLiveMode(true); src.setLiveWet(0.7f);
+          src.getStateInformation(liveState); }                 // a saved Live-mode session
+
+        BacktraceProcessor p;                                    // fresh instance, NOT prepared yet
+        p.setStateInformation(liveState.getData(), (int) liveState.getSize());  // restore FIRST
+        juce::Thread::sleep(60);                                 // let the worker attempt the (guarded) build
+        p.prepareToPlay(SR, 512);                                // prepare AFTER restore
+        juce::Thread::sleep(60);
+        juce::AudioBuffer<float> b(2, 512); juce::MidiBuffer mi;
+        bool finite = true;
+        for (int k = 0; k < 8; ++k)
+        {
+            b.clear(); b.setSample(0, 10, 1.0f); b.setSample(1, 10, 1.0f);
+            p.processBlock(b, mi);
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < 512; ++i)
+                if (! std::isfinite(b.getSample(c, i))) finite = false;
+        }
+        check("survives state-restore-before-prepare (Live mode)", finite && p.getLiveMode(),
+              "liveMode=" + juce::String((int) p.getLiveMode()) + " wet=" + juce::String(p.getLiveWet(), 2));
+    }
+
     // ---- 1. RINGOUT: audio continues after the landing; no hard dead-stop -------------
     std::printf("1. Ringout / dead-stop:\n");
     {
@@ -456,11 +484,13 @@ int main()
         const int lat = proc.getLatencySamples();
 
         // The convolution loads the kernel on a background thread and swaps it into the
-        // active path on a subsequent process() call — give it real settle time + a few
-        // priming blocks so the offline test sees the loaded kernel (deterministic in a DAW).
-        juce::Thread::sleep(300);
+        // active path on a subsequent process() call. Poll until loaded, then run priming
+        // blocks so the swap is committed before we measure (deterministic in a DAW).
         juce::AudioBuffer<float> warm(2, 512);
-        for (int k = 0; k < 40; ++k)
+        int waited = 0;
+        while (! proc.liveConvLoaded() && waited < 4000) { juce::Thread::sleep(20); waited += 20; }
+        juce::Thread::sleep(40);
+        for (int k = 0; k < 96; ++k)
         { warm.clear(); juce::AudioBuffer<float> ws(warm.getArrayOfWritePointers(), 2, 512); proc.liveProcessBlock(ws); }
 
         const int total = juce::jmax(4, lat) * 5 / 2;

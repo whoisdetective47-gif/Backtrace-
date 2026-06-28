@@ -112,6 +112,7 @@ void BacktraceProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     springVerb.prepare(sampleRate);
 
     livePreverb.prepare(sampleRate, samplesPerBlock, getTotalNumInputChannels());
+    dspPrepared.store(true);               // all DSP sized → the worker may now build the live IR
     if (liveMode.load()) requestLiveIR();  // build the preverb kernel only when Live mode is active
     {                                       // report the pre-swell latency up front (IR fills in async)
         const int est = liveMode.load() ? (livePreverb.convLatency() + preverbLengthSamples() - 1) : 0;
@@ -1163,6 +1164,12 @@ int BacktraceProcessor::preverbLengthSamples() const
 // convolving the live input makes every sound bloom a swell that LEADS INTO it.
 void BacktraceProcessor::rebuildLiveIR()
 {
+    // CRITICAL: never touch the reverb objects / convolution before prepareToPlay has
+    // sized them. The host (Cubase) can call setStateInformation — which requests this
+    // build — BEFORE prepareToPlay, and using unprepared DSP crashes. prepareToPlay
+    // re-requests the build once everything is ready.
+    if (! dspPrepared.load()) { liveIRRequested.store(true); return; }
+
     juce::ScopedNoDenormals noDenormals;
     const int M  = preverbLengthSamples();
     const int ch = 2;
