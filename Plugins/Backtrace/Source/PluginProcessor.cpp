@@ -114,10 +114,10 @@ void BacktraceProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     livePreverb.prepare(sampleRate, samplesPerBlock, getTotalNumInputChannels());
     dspPrepared.store(true);               // all DSP sized → the worker may now build the live IR
     if (liveMode.load()) requestLiveIR();  // build the preverb kernel only when Live mode is active
-    {                                       // report the pre-swell latency up front (IR fills in async)
-        const int est = liveMode.load() ? (livePreverb.convLatency() + preverbLengthSamples() - 1) : 0;
-        setLatencySamples(juce::jmax(0, est));
-        liveLatencyApplied.store(juce::jmax(0, est));
+    {                                       // SAME formula as pushLiveLatencyIfChanged → no disagreement,
+        const int lat0 = (liveMode.load() && livePreverb.isReady()) ? livePreverb.getLatencySamples() : 0;
+        setLatencySamples(lat0);            // so the host never gets caught in a re-sync loop
+        liveLatencyApplied.store(lat0);
     }
 
     sOutput.reset(sampleRate, 0.02);
@@ -1169,7 +1169,9 @@ int BacktraceProcessor::preverbLengthSamples() const
     if (bpm <= 1.0) bpm = (syncCapture.finBpm() > 1.0 ? syncCapture.finBpm() : 120.0);
     const double quarterSec = 60.0 / bpm;
     const double sec = liveNoteQuarters(liveTimeIndex.load()) * liveFeelMult(liveFeel.load()) * quarterSec;
-    return juce::jlimit((int) (currentSR * 0.05), (int) (currentSR * 8.0), (int) (sec * currentSR));
+    // Cap at 5 s: longer convolutions are CPU-heavy in real time and a >5 s preverb means
+    // >5 s of latency (impractical). Bounds worst-case CPU + kernel-load time.
+    return juce::jlimit((int) (currentSR * 0.05), (int) (currentSR * 5.0), (int) (sec * currentSR));
 }
 
 // Build the reversed-reverb IR (the preverb kernel) and hand it to the convolution.

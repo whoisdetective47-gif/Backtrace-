@@ -481,7 +481,6 @@ int main()
         proc.setLiveMode(true);
         proc.prepareToPlay(SR, 512);
         proc.rebuildLiveIR();                          // synchronous kernel build on this thread
-        const int lat = proc.getLatencySamples();
 
         // The convolution loads the kernel on a background thread and swaps it into the
         // active path on a subsequent process() call. Poll until loaded, then run priming
@@ -493,6 +492,8 @@ int main()
         for (int k = 0; k < 96; ++k)
         { warm.clear(); juce::AudioBuffer<float> ws(warm.getArrayOfWritePointers(), 2, 512); proc.liveProcessBlock(ws); }
 
+        proc.pushLiveLatencyIfChanged();               // mirror the editor timer: publish the loaded-IR latency
+        const int lat = proc.getLatencySamples();
         const int total = juce::jmax(4, lat) * 5 / 2;
         juce::AudioBuffer<float> out(2, total); out.clear();
         const int IMP = (int) (SR * 0.02);             // impulse 20 ms into the live stream
@@ -571,6 +572,7 @@ int main()
             juce::Thread::sleep(80);
             for (int k = 0; k < 90; ++k)
             { warm.clear(); juce::AudioBuffer<float> ws(warm.getArrayOfWritePointers(), 2, 512); proc.liveProcessBlock(ws); }
+            proc.pushLiveLatencyIfChanged();
             const int lat = proc.getLatencySamples();
             const int total = juce::jmax(1024, lat * 2);
             juce::AudioBuffer<float> out(2, total); out.clear();

@@ -48,10 +48,11 @@ public:
         dryWp = 0; prevWet = 0.0f; prevDry = 1.0f;
     }
 
-    // The convolution's own latency = the NonUniform head size. getLatency() can read 0
-    // before the async kernel load finishes, so floor it at the known head size — the dry
-    // delay MUST include it or the wet swell sits ~10 ms behind the dry.
-    int  convLatency() const { const int l = (int) conv.getLatency(); return l > 0 ? l : kConvHead; }
+    // FIXED at the NonUniform head size. conv.getLatency() is unreliable (0 before the async
+    // kernel load, the real value after) — using it makes the reported latency oscillate,
+    // which triggers an endless host PDC re-sync loop (frozen transport). NonUniform's latency
+    // IS the head size, so this constant is both correct AND deterministic.
+    int  convLatency() const { return kConvHead; }
     int  getLatencySamples() const { return dryLatency.load(); }
     bool isReady() const { return ready.load(); }
     int  loadedIRSize() const { return (int) conv.getCurrentIRSize(); }   // 0 until the kernel finishes loading
@@ -82,11 +83,12 @@ public:
         const int ch = juce::jmin(channels, buffer.getNumChannels());
         if (n <= 0 || ch <= 0 || dryDelay.getNumSamples() <= 0) return;   // not prepared → leave audio untouched
 
-        const bool wet = ready.load();
-        if (wet)
+        const bool wet  = ready.load();
+        const int  wetN = wet ? juce::jmin(n, maxBlock) : 0;   // conv + wetBuf sized for maxBlock — NEVER exceed
+        if (wetN > 0)
         {
-            for (int c = 0; c < ch; ++c) wetBuf.copyFrom(c, 0, buffer, c, 0, n);
-            juce::dsp::AudioBlock<float> block(wetBuf.getArrayOfWritePointers(), (size_t) ch, (size_t) n);
+            for (int c = 0; c < ch; ++c) wetBuf.copyFrom(c, 0, buffer, c, 0, wetN);
+            juce::dsp::AudioBlock<float> block(wetBuf.getArrayOfWritePointers(), (size_t) ch, (size_t) wetN);
             juce::dsp::ProcessContextReplacing<float> ctx(block);
             conv.process(ctx);
         }
@@ -109,7 +111,7 @@ public:
                 const float in = io[i];
                 dline[wp] = in;
                 int rp = wp - dl; if (rp < 0) rp += dN;
-                float o = dline[rp] * dg + (wet ? w[i] * wg : 0.0f);
+                float o = dline[rp] * dg + ((wet && i < wetN) ? w[i] * wg : 0.0f);
                 o = std::tanh(o);                                    // soft ceiling — protection only
                 io[i] = o;
                 wg += wetInc; dg += dryInc;
