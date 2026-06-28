@@ -266,13 +266,29 @@ public:
     float getLiveWet() const    { return liveWet.load(); }
     void  setLiveDry(float v)   { liveDry.store(juce::jlimit(0.0f, 1.0f, v)); }
     float getLiveDry() const    { return liveDry.load(); }
+    // GLOBAL MIX / Blend — the main dry/wet control (0 = dry, 1 = full wet). Live final-edit.
+    void  setMacroMix(float v)  { macroMix.store(juce::jlimit(0.0f, 1.0f, v)); markDirty(); }
+    float getMacroMix() const   { return macroMix.load(); }
+    // Tempo-synced Pre-Swell timing: base note value + Straight/Dotted/Triplet feel.
+    void  setLiveTimeIndex(int i) { liveTimeIndex.store(juce::jlimit(0, 7, i)); markTailDirty(); }
+    int   getLiveTimeIndex() const { return liveTimeIndex.load(); }
+    void  setLiveFeel(int f)      { liveFeel.store(juce::jlimit(0, 2, f)); markTailDirty(); }
+    int   getLiveFeel() const     { return liveFeel.load(); }
+    static double liveNoteQuarters(int idx)
+    { static const double q[] = { 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0 }; return q[juce::jlimit(0, 7, idx)]; }
+    static double liveFeelMult(int feel) { return feel == 1 ? 1.5 : feel == 2 ? (2.0 / 3.0) : 1.0; }
+    juce::String  liveTimeLabel() const
+    { static const char* n[] = { "1/32","1/16","1/8","1/4","1/2","1 bar","2 bars","4 bars" };
+      static const char* f[] = { "Straight","Dotted","Triplet" };
+      return juce::String(n[juce::jlimit(0,7,liveTimeIndex.load())]) + " " + f[juce::jlimit(0,2,liveFeel.load())]; }
     void  requestLiveIR()       { liveIRRequested.store(true); if (renderThread) renderThread->notify(); }
     void  rebuildLiveIR();                  // worker: render reverb tail of an impulse → reverse → load
     int   preverbLengthSamples() const;     // pre-swell length (samples), DAW-tempo-locked
     void  pushLiveLatencyIfChanged();       // message thread: setLatencySamples + updateHostDisplay
     bool  liveReady() const     { return livePreverb.isReady(); }
     bool  liveConvLoaded() const { return livePreverb.loadedIRSize() > 0; }   // convolution kernel finished loading
-    void  liveProcessBlock(juce::AudioBuffer<float>& b) { livePreverb.process(b, liveWet.load(), liveDry.load()); }
+    void  liveProcessBlock(juce::AudioBuffer<float>& b)
+    { const float mix = macroMix.load(); livePreverb.process(b, mix * liveWet.load(), (1.0f - mix) * liveDry.load()); }
 
     // ---- Printed-swell editor stage (post-render trim / fades / filter) ----
     // The render (stage 1) fills swellBuffer; trim+fades+filter (stage 2) shape it
@@ -394,6 +410,7 @@ public:
     const juce::AudioBuffer<float>& getCaptureBuffer() const { return sourceSlots[(size_t) activeSource].buffer; }
     int    getCaptureLength()     const { return sourceSlots[(size_t) activeSource].length; }
     double getCaptureSampleRate() const { const double s = sourceSlots[(size_t) activeSource].sr; return s > 0 ? s : currentSR; }
+    double getCurrentSampleRate() const { return currentSR; }   // actual processing SR (for the live latency readout)
 
 private:
     juce::String resultBaseName() const;   // "Backtrace_<preset>_<bars>" for printed-swell files
@@ -404,7 +421,7 @@ private:
     void applyPitch(juce::AudioBuffer<float>& buf, int len, float semitones);  // offline, latency-compensated
     void applyDelay(juce::AudioBuffer<float>& buf, int total, bool wetOnly = false, double fillSec = 0.0);
     void applyReverb(juce::AudioBuffer<float>& buf, int total, bool wetOnly = false, double fillSec = 0.0,
-                     float decayOverride = -1.0f, float density = 0.0f);
+                     float decayOverride = -1.0f, float density = 0.0f, float shimmerScale = 1.0f);
     int  renderSwell(juce::AudioBuffer<float>& dest, int swellLen);   // wet-only reversed swell, end-aligned
     int  renderTail (juce::AudioBuffer<float>& dest);                 // FORWARD wet tail (Audition Tail, pre-reverse)
     void applySwellFX(juce::AudioBuffer<float>& buf, int total, int mode, double fillSec,
@@ -506,8 +523,12 @@ private:
     // ---- Live Preverb (real-time reverse reverb) ----
     LivePreverb        livePreverb;
     std::atomic<bool>  liveMode { false };       // Mode 2 = Live Preverb (else Capture/Print)
-    std::atomic<float> liveWet { 0.6f };         // Wet Amount
+    std::atomic<float> liveWet { 1.0f };         // internal wet trim (the swell is hard-bounded in the IR)
     std::atomic<float> liveDry { 1.0f };         // Dry Amount (0 = Dry Mute)
+    std::atomic<float> macroMix { 0.25f };       // GLOBAL dry/wet blend (the MIX knob)
+    std::atomic<int>   liveTimeIndex { 3 };      // 0..7 = 1/32,1/16,1/8,1/4,1/2,1bar,2bar,4bar (default 1/4)
+    std::atomic<int>   liveFeel { 0 };           // 0 Straight, 1 Dotted, 2 Triplet
+    static constexpr float kLiveIRGain = 0.40f;  // L2 (energy) target for the preverb kernel — usable, not blasting
     std::atomic<bool>  liveIRRequested { false }; // worker should rebuild the preverb IR
     std::atomic<int>   liveLatencyApplied { -1 }; // last latency pushed to the host
     std::atomic<bool>  dspPrepared { false };     // true only after prepareToPlay — gates worker DSP use

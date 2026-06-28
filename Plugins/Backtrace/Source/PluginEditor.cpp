@@ -511,6 +511,37 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     liveStatusLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(liveStatusLabel);
 
+    // TIME (tempo-synced pre-swell, like a delay) + FEEL (Straight/Dotted/Triplet)
+    { const char* tn[] = { "1/32","1/16","1/8","1/4","1/2","1 bar","2 bars","4 bars" };
+      for (int i = 0; i < 8; ++i) liveTimeBox.addItem(tn[i], i + 1); }
+    liveTimeBox.onChange = [this] { proc.setLiveTimeIndex(liveTimeBox.getSelectedId() - 1); };
+    liveTimeBox.setTooltip("Pre-Swell TIME — tempo-synced like a delay. Base note value; the host tempo sets the length (and the latency).");
+    addAndMakeVisible(liveTimeBox);
+    liveFeelBox.addItem("Straight", 1); liveFeelBox.addItem("Dotted", 2); liveFeelBox.addItem("Triplet", 3);
+    liveFeelBox.onChange = [this] { proc.setLiveFeel(liveFeelBox.getSelectedId() - 1); };
+    liveFeelBox.setTooltip("FEEL: Straight, Dotted (×1.5), or Triplet (×2/3).");
+    addAndMakeVisible(liveFeelBox);
+    liveTimeLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.6f));
+    liveTimeLabel.setJustificationType(juce::Justification::centredRight);
+    liveTimeLabel.setFont(11.0f);
+    addAndMakeVisible(liveTimeLabel);
+
+    // MIX — global dry/wet blend, bottom-right, easy to grab while auditioning.
+    liveMixKnob.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    liveMixKnob.setRange(0.0, 1.0, 0.01);
+    liveMixKnob.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 56, 16);
+    liveMixKnob.setLookAndFeel(&knobLNF);
+    liveMixKnob.setColour(juce::Slider::thumbColourId, juce::Colour(0xff7ad1ff));
+    liveMixKnob.textFromValueFunction = [](double v) { return juce::String(juce::roundToInt(v * 100.0)) + "%"; };
+    liveMixKnob.onValueChange = [this] { proc.setMacroMix((float) liveMixKnob.getValue()); };
+    liveMixKnob.setTooltip("MIX — global dry/wet blend. 0% = dry source, 100% = full Backtrace effect. Default 25%.");
+    liveMixKnob.updateText();
+    addAndMakeVisible(liveMixKnob);
+    liveMixLabel.setColour(juce::Label::textColourId, juce::Colour(0xff7ad1ff));
+    liveMixLabel.setFont(juce::Font(11.0f, juce::Font::bold));
+    liveMixLabel.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(liveMixLabel);
+
     // --- reverb space: flavor dropdown + remappable knob cluster ---
     reverbCaption.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.4f));
     reverbCaption.setFont(10.0f);
@@ -828,6 +859,9 @@ void BacktraceEditor::syncControlsFromProcessor()
 {
     liveModeToggle.setToggleState(proc.getLiveMode(), juce::dontSendNotification);
     liveWetKnob.setValue(proc.getLiveWet(), juce::dontSendNotification);
+    liveTimeBox.setSelectedId(proc.getLiveTimeIndex() + 1, juce::dontSendNotification);
+    liveFeelBox.setSelectedId(proc.getLiveFeel() + 1, juce::dontSendNotification);
+    liveMixKnob.setValue(proc.getMacroMix(), juce::dontSendNotification);
 
     const int df = proc.getDelayFlavor();
     delayFlavorBox.setSelectedId(df + 1, juce::dontSendNotification);
@@ -1465,7 +1499,7 @@ void BacktraceEditor::timerCallback()
         liveModeToggle.setToggleState(live, juce::dontSendNotification);
     {
         const int    lat = proc.getLatencySamples();
-        const double ms  = 1000.0 * lat / juce::jmax(1.0, proc.getCaptureSampleRate());
+        const double ms  = 1000.0 * lat / juce::jmax(1.0, proc.getCurrentSampleRate());
         const juce::String s = live ? ("DAW preverb - " + juce::String(ms, 0) + " ms latency"
                                        + (proc.liveReady() ? juce::String() : juce::String("  loading...")))
                                     : juce::String("Capture / Print mode");
@@ -1820,6 +1854,13 @@ void BacktraceEditor::resized()
             liveWetKnob.setBounds(row);
         }
         liveStatusLabel.setBounds(a.removeFromTop(12));
+        {                       // TIME (tempo-synced pre-swell) + FEEL
+            auto row = a.removeFromTop(22);
+            liveTimeLabel.setBounds(row.removeFromLeft(36));
+            liveTimeBox.setBounds(row.removeFromLeft(94));
+            row.removeFromLeft(6);
+            liveFeelBox.setBounds(row.removeFromLeft(92));
+        }
         a.removeFromTop(4);
         {
             auto row = a.removeFromTop(26);
@@ -1852,10 +1893,16 @@ void BacktraceEditor::resized()
         auditionTailButton.setBounds(a.removeFromTop(24));
     }
 
-    // ---- BOTTOM: 8-macro strip ----
+    // ---- BOTTOM: 8-macro strip + global MIX knob (bottom-right) ----
     {
         auto a = juce::Rectangle<int>(8, 648, 984, 96).reduced(10);
         a.removeFromTop(16);   // "GLOBAL SWELL MACROS"
+        {                       // MIX — global dry/wet blend, bottom-right corner
+            auto mixCell = a.removeFromRight(80);
+            liveMixLabel.setBounds(mixCell.removeFromTop(16));
+            liveMixKnob.setBounds(mixCell);
+            a.removeFromRight(12);
+        }
         const int mw = a.getWidth() / juce::jmax(1, macroKnobs.size());
         for (int i = 0; i < macroKnobs.size(); ++i)
         {

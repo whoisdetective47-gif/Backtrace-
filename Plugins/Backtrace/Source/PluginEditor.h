@@ -106,6 +106,11 @@ private:
     juce::Slider       liveWetKnob;                 // Wet Amount (horizontal)
     juce::Label        liveWetLabel { {}, "Wet" };
     juce::Label        liveStatusLabel;             // mode + reported latency
+    juce::ComboBox     liveTimeBox;                 // TIME: 1/32 .. 4 bars
+    juce::ComboBox     liveFeelBox;                 // FEEL: Straight / Dotted / Triplet
+    juce::Label        liveTimeLabel { {}, "TIME" };
+    juce::Slider       liveMixKnob;                 // GLOBAL MIX / Blend (bottom-right)
+    juce::Label        liveMixLabel  { {}, "MIX" };
     int lastLiveLatency = -1;
 
     // reverb (Phase 9)

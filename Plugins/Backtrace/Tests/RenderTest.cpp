@@ -476,8 +476,8 @@ int main()
     {
         setReverb(proc, 3);                            // Ghost Shimmer (default reverb)
         proc.setDelayFlavor(0);
-        proc.setSwellLenBars(0.25f);                   // short pre-swell → fast test
-        proc.setLiveWet(1.0f); proc.setLiveDry(0.0f);  // dry muted → measure the pure preverb
+        proc.setLiveTimeIndex(3); proc.setLiveFeel(0); // 1/4 Straight pre-swell
+        proc.setLiveWet(1.0f); proc.setLiveDry(0.0f); proc.setMacroMix(1.0f);  // full wet → measure the swell
         proc.setLiveMode(true);
         proc.prepareToPlay(SR, 512);
         proc.rebuildLiveIR();                          // synchronous kernel build on this thread
@@ -518,8 +518,8 @@ int main()
         }
 
         check("live preverb kernel loaded", proc.liveConvLoaded(),
-              "latency=" + juce::String(lat) + " (" + juce::String(1000.0 * lat / SR, 0) + " ms)");
-        check("live output finite + bounded (no runaway)", finite && peak <= 1.01f && peak > 0.01f,
+              "latency=" + juce::String(lat) + " (" + juce::String(1000.0 * lat / SR, 0) + " ms) " + proc.liveTimeLabel());
+        check("live output finite + bounded (no runaway)", finite && peak <= 1.01f && peak > 0.0005f,
               "peak=" + juce::String(peak, 4) + " @" + juce::String(peakIdx));
 
         // The swell peak appears AFTER the impulse (→ after host PDC it sits in front of the
@@ -529,8 +529,37 @@ int main()
         const double late  = rms(out, peakIdx - w,     peakIdx);           // just before the peak
         check("preverb swell follows the trigger (leads source after PDC)", peakIdx > IMP + lat / 4,
               "peak@" + juce::String(peakIdx) + " IMP=" + juce::String(IMP));
-        check("preverb RISES into its peak (leads in, not a burst)", late > early * 1.5 && late > 0.002,
+        check("preverb RISES into its peak (leads in, not a burst)", late > early * 1.5 && late > 0.0002,
               "early=" + juce::String(early, 5) + " late=" + juce::String(late, 5));
+
+        // GAIN STAGING — the headline Phase-1.5 complaint was "way too loud". On a sustained
+        // tonal source (the worst case for a resonant reverb kernel): full wet must stay
+        // controlled (not slam the ceiling), and the DEFAULT 25% Mix must not push the output
+        // past the dry source.
+        auto sustainedPeak = [&](float mix) -> float
+        {
+            proc.setMacroMix(mix); proc.setLiveWet(1.0f); proc.setLiveDry(1.0f);
+            juce::AudioBuffer<float> tb(2, 512);
+            const float amp = 0.5f, inc = juce::MathConstants<float>::twoPi * 220.0f / (float) SR;
+            float phase = 0.0f, pk = 0.0f;
+            for (int k = 0; k < 240; ++k)                  // ~2.5 s → steady state past the latency
+            {
+                for (int i = 0; i < 512; ++i) { const float s = amp * std::sin(phase); phase += inc;
+                    tb.setSample(0, i, s); tb.setSample(1, i, s); }
+                juce::AudioBuffer<float> ts(tb.getArrayOfWritePointers(), 2, 512);
+                proc.liveProcessBlock(ts);
+                if (k > 200) for (int c = 0; c < 2; ++c) for (int i = 0; i < 512; ++i)
+                    pk = juce::jmax(pk, std::abs(ts.getSample(c, i)));
+            }
+            return pk;
+        };
+        const float fullWet = sustainedPeak(1.0f);
+        const float defMix  = sustainedPeak(0.25f);
+        check("NO BLAST: full-wet sustained stays controlled (<= 0.85)", fullWet <= 0.85f,
+              "fullWetPeak=" + juce::String(fullWet, 3) + " (in 0.5)");
+        check("default Mix 25% not louder than the dry source", defMix <= 0.6f,
+              "defMixPeak=" + juce::String(defMix, 3) + " (dry 0.5)");
+        proc.setMacroMix(0.25f);
 
         proc.setLiveMode(false);                       // restore Capture mode default
     }

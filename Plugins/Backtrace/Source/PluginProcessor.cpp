@@ -194,7 +194,10 @@ void BacktraceProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
     // Replaces passthrough with: delayed dry + reversed-IR convolution wet. The host
     // compensates the reported latency so the preverb lands in front of the source.
     if (liveMode.load() && ! playPlaying.load())
-        livePreverb.process(buffer, liveWet.load(), liveDry.load());
+    {
+        const float mix = macroMix.load();                 // global dry/wet blend
+        livePreverb.process(buffer, mix * liveWet.load(), (1.0f - mix) * liveDry.load());
+    }
 
     // Monitor gain. Passthrough otherwise (FX/pitch/routing arrive later).
     sOutput.setTargetValue(
@@ -234,6 +237,9 @@ juce::var BacktraceProcessor::getStateVar() const
     o->setProperty("liveMode", liveMode.load());     // Live Preverb (Mode 2)
     o->setProperty("liveWet",  (double) liveWet.load());
     o->setProperty("liveDry",  (double) liveDry.load());
+    o->setProperty("liveMix",  (double) macroMix.load());
+    o->setProperty("liveTime", liveTimeIndex.load());
+    o->setProperty("liveFeel", liveFeel.load());
     o->setProperty("preset", (currentPreset >= 0) ? getPresetName(currentPreset) : juce::String());
 
     auto* mac = new juce::DynamicObject();   // global swell macros
@@ -308,6 +314,9 @@ void BacktraceProcessor::setStateVar(const juce::var& v)
     if (o->hasProperty("liveMode")) liveMode.store((bool) o->getProperty("liveMode"));
     if (o->hasProperty("liveWet"))  liveWet.store((float) (double) o->getProperty("liveWet"));
     if (o->hasProperty("liveDry"))  liveDry.store((float) (double) o->getProperty("liveDry"));
+    if (o->hasProperty("liveMix"))  macroMix.store((float) (double) o->getProperty("liveMix"));
+    if (o->hasProperty("liveTime")) liveTimeIndex.store((int) o->getProperty("liveTime"));
+    if (o->hasProperty("liveFeel")) liveFeel.store((int) o->getProperty("liveFeel"));
     requestLiveIR();                                  // rebuild the preverb kernel for restored settings
 
     // Global swell macros — default to a strong, neutral set when absent (older
@@ -1151,11 +1160,16 @@ int BacktraceProcessor::swellLengthSamples() const
 //  Live Preverb (Mode 2) — real-time DAW-synced reverse reverb
 // ===========================================================================
 
-// Pre-Swell length in samples: reuses the DAW-tempo-locked Swell Length, clamped
-// to a live-friendly window (50 ms .. 8 s) — this is the latency the host compensates.
+// Pre-Swell length in samples — tempo-synced like a delay: base note value (TIME) modified
+// by Straight/Dotted/Triplet (FEEL), locked to the live DAW tempo. Clamped to a live-friendly
+// window (50 ms .. 8 s); this is the latency the host compensates.
 int BacktraceProcessor::preverbLengthSamples() const
 {
-    return juce::jlimit((int) (currentSR * 0.05), (int) (currentSR * 8.0), swellLengthSamples());
+    double bpm = syncCapture.getBpm();
+    if (bpm <= 1.0) bpm = (syncCapture.finBpm() > 1.0 ? syncCapture.finBpm() : 120.0);
+    const double quarterSec = 60.0 / bpm;
+    const double sec = liveNoteQuarters(liveTimeIndex.load()) * liveFeelMult(liveFeel.load()) * quarterSec;
+    return juce::jlimit((int) (currentSR * 0.05), (int) (currentSR * 8.0), (int) (sec * currentSR));
 }
 
 // Build the reversed-reverb IR (the preverb kernel) and hand it to the convolution.
@@ -1181,21 +1195,56 @@ void BacktraceProcessor::rebuildLiveIR()
     if (reverbFlavor.load() != 0)
     {
         const double mSec   = (double) M / juce::jmax(1.0, currentSR);
-        const float  decayOv = juce::jlimit(0.30f, 0.95f, 0.30f + (float) mSec * 0.08f);   // fill ~the pre-swell
-        applyReverb(ir, M, /*wetOnly*/ true, mSec, decayOv, 0.30f);
+        // Shorter, more-damped tail than the offline render: a long high-Q reverb tail rings
+        // and RESONATES (sustained/tonal sources build up loud and harsh). A controlled decay
+        // gives a smooth bloom into the landing, less mud, and far less resonant buildup.
+        const float  decayOv = juce::jlimit(0.22f, 0.55f, 0.22f + (float) mSec * 0.05f);
+        applyReverb(ir, M, /*wetOnly*/ true, mSec, decayOv, 0.08f, /*shimmerScale*/ 0.25f);
     }
 
     for (int c = 0; c < ch; ++c)                           // reverse → preverb (quiet build-up → loud landing)
         std::reverse(ir.getWritePointer(c), ir.getWritePointer(c) + M);
 
-    // Short fade-in on the very start of the build-up so the kernel head is click-free.
-    const int fin = juce::jmin(M / 4, (int) (currentSR * 0.005));
-    for (int c = 0; c < ch; ++c)
-    { auto* d = ir.getWritePointer(c); for (int i = 0; i < fin; ++i) d[i] *= (float) i / (float) fin; }
+    // Tone-shape the kernel: HPF (~150 Hz, de-mud) + gentle LPF (~8 kHz, de-harsh) so the
+    // swell is smooth and expensive, not brittle/digital.
+    {
+        const float aHp = (float) std::exp(-2.0 * juce::MathConstants<double>::pi * 150.0 / juce::jmax(1.0, currentSR));
+        const float aLp = 1.0f - (float) std::exp(-2.0 * juce::MathConstants<double>::pi * 8000.0 / juce::jmax(1.0, currentSR));
+        for (int c = 0; c < ch; ++c)
+        {
+            float* d = ir.getWritePointer(c);
+            float hpZ = 0.0f, lpZ = 0.0f;
+            for (int i = 0; i < M; ++i)
+            {
+                const float x  = d[i];
+                hpZ = aHp * hpZ + (1.0f - aHp) * x;        // low component
+                const float hp = x - hpZ;                  // high-passed (de-mud)
+                lpZ += aLp * (hp - lpZ);                   // low-passed (de-harsh)
+                d[i] = lpZ;
+            }
+        }
+    }
 
-    float pk = 0.0f;                                       // normalise so convolution gain is controlled
-    for (int c = 0; c < ch; ++c) pk = juce::jmax(pk, ir.getMagnitude(c, 0, M));
-    if (pk > 1.0e-6f) ir.applyGain(0.5f / pk);
+    // Smooth envelope: a long, soft (squared) fade-in on the quiet build-up start + a short
+    // taper on the loud landing end — no abrupt onset, no hard buffer edge.
+    const int fin  = juce::jmin(M / 3, (int) (currentSR * 0.030));
+    const int fout = juce::jmin(M / 8, (int) (currentSR * 0.008));
+    for (int c = 0; c < ch; ++c)
+    {
+        float* d = ir.getWritePointer(c);
+        for (int i = 0; i < fin;  ++i) { const float g = (float) i / (float) fin; d[i] *= g * g; }
+        for (int i = 0; i < fout; ++i) d[M - 1 - i] *= (float) i / (float) fout;
+    }
+
+    // GAIN: L2 (energy) normalise → a CONSISTENT, usable wet level (≈ input level for
+    // broadband material), instead of peak-normalising (which let sustained material sum up
+    // to a blast) or L1-normalising (which collapsed the level to near-silence). The output
+    // tanh ceiling catches any resonant peaks, and the Mix knob sets the final blend.
+    double e[2] = { 0.0, 0.0 };
+    for (int c = 0; c < ch; ++c)
+    { const float* d = ir.getReadPointer(c); for (int i = 0; i < M; ++i) e[c] += (double) d[i] * (double) d[i]; }
+    const double l2 = std::sqrt(juce::jmax(e[0], e[1]));
+    if (l2 > 1.0e-6) ir.applyGain((float) ((double) kLiveIRGain / l2));
 
     livePreverb.setIR(std::move(ir), currentSR);
 }
@@ -1674,7 +1723,7 @@ void BacktraceProcessor::applyFeedbackChain(juce::AudioBuffer<float>& buf, int t
 // decayOverride >= 0 drives the Decay slot directly (the length-aware tail-fit loop
 // sets it); density (0..1) adds diffusion/body for longer swells.
 void BacktraceProcessor::applyReverb(juce::AudioBuffer<float>& buf, int total, bool wetOnly,
-                                     double fillSec, float decayOverride, float density)
+                                     double fillSec, float decayOverride, float density, float shimmerScale)
 {
     const int flavor = reverbFlavor.load();
     ReverbSpace* space = (flavor == 1) ? (ReverbSpace*) &velvetHall
@@ -1703,7 +1752,7 @@ void BacktraceProcessor::applyReverb(juce::AudioBuffer<float>& buf, int total, b
             p[i] = juce::jlimit(0.0f, 1.0f, dec + tail * 0.30f);
         }
         if (nm.equalsIgnoreCase("Diffuse")) p[i] = juce::jlimit(0.0f, 1.0f, p[i] + ghost * 0.45f + density * 0.30f);
-        if (nm.equalsIgnoreCase("Shimmer")) p[i] = juce::jlimit(0.0f, 1.0f, p[i] + ghost * 0.45f);
+        if (nm.equalsIgnoreCase("Shimmer")) p[i] = juce::jlimit(0.0f, 1.0f, (p[i] + ghost * 0.45f) * shimmerScale);
         if (nm.equalsIgnoreCase("Mod"))     p[i] = juce::jlimit(0.0f, 1.0f, p[i] + ghost * 0.35f);
         if (nm.equalsIgnoreCase("Width"))   p[i] = juce::jlimit(0.0f, 1.0f, p[i] + ghost * 0.20f);
     }

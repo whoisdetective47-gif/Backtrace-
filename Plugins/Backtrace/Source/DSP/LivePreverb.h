@@ -45,7 +45,7 @@ public:
     {
         conv.reset();
         if (dryDelay.getNumSamples() > 0) dryDelay.clear();
-        dryWp = 0;
+        dryWp = 0; prevWet = 0.0f; prevDry = 1.0f;
     }
 
     // The convolution's own latency = the NonUniform head size. getLatency() can read 0
@@ -93,24 +93,31 @@ public:
 
         const int dN = dryDelay.getNumSamples();
         const int dl = dryLatency.load();
+        // Linear-ramp the gains from last block's values to the new targets → no zipper on
+        // Mix moves. Both channels re-ramp from the same start, so they stay phase-locked.
+        const float wet0 = prevWet, dry0 = prevDry;
+        const float wetInc = (wetGain - wet0) / (float) juce::jmax(1, n);
+        const float dryInc = (dryGain - dry0) / (float) juce::jmax(1, n);
         for (int c = 0; c < ch; ++c)
         {
             auto* io = buffer.getWritePointer(c);
             auto* dline = dryDelay.getWritePointer(c);
             const float* w = wet ? wetBuf.getReadPointer(c) : nullptr;
-            int wp = dryWp;
+            int wp = dryWp; float wg = wet0, dg = dry0;
             for (int i = 0; i < n; ++i)
             {
                 const float in = io[i];
                 dline[wp] = in;
                 int rp = wp - dl; if (rp < 0) rp += dN;
-                float o = dline[rp] * dryGain + (wet ? w[i] * wetGain : 0.0f);
-                o = std::tanh(o);                                    // soft ceiling — never hard-cut
+                float o = dline[rp] * dg + (wet ? w[i] * wg : 0.0f);
+                o = std::tanh(o);                                    // soft ceiling — protection only
                 io[i] = o;
+                wg += wetInc; dg += dryInc;
                 if (++wp >= dN) wp = 0;
             }
         }
         dryWp = (dryWp + n) % dN;
+        prevWet = wetGain; prevDry = dryGain;
     }
 
 private:
@@ -119,6 +126,7 @@ private:
     juce::AudioBuffer<float> wetBuf, dryDelay;
     double sampleRate = 44100.0;
     int    channels = 2, maxBlock = 512, dryWp = 0;
+    float  prevWet = 0.0f, prevDry = 1.0f;   // gain-ramp state (zipper-free Mix)
     std::atomic<int>  dryLatency { 0 };
     std::atomic<bool> ready { false };
 };
