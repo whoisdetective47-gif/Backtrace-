@@ -165,13 +165,13 @@ private:
     void syncFadeControls();
     void resetFade(bool fin, bool fout);
     void showFadeMenu(int which);   // right-click curve menu (0 = in, 1 = out)
-    juce::Label       filterCaption { {}, "FINAL FILTER" };
+    juce::Label       filterCaption { {}, "FILTER" };
     juce::ToggleButton filterToggle       { "Filter" };
     juce::ToggleButton filterMotionToggle { "Motion" };
     juce::Slider      hpfKnob, hpfEndKnob, lpfKnob, lpfEndKnob;
     juce::Label       hpfLabel { {}, "HPF" }, hpfEndLabel { {}, "HPF End" },
                       lpfLabel { {}, "LPF" }, lpfEndLabel { {}, "LPF End" };
-    juce::ComboBox    filterSlopeBox, filterCurveBox;   // Harrison-style slope + motion curve
+    juce::ComboBox    filterSlopeBox, filterCurveBox, filterMotionModeBox;   // slope + motion curve + motion mode
     juce::Slider      filterDriveKnob;                  // Character / Edge
     juce::Label       filterSlopeLabel { {}, "Slope" }, filterCurveLabel { {}, "Curve" },
                       filterDriveLabel { {}, "Char" };

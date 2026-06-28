@@ -311,6 +311,10 @@ public:
     int   getFilterSlope() const        { return filterSlope.load(); }
     void  setFilterCurve(int c)         { filterCurve.store(c); markDirty(); }   // motion time-curve 0..3
     int   getFilterCurve() const        { return filterCurve.load(); }
+    // Motion Mode: 0 Rise Only (open to Peak Land, hold), 1 Rise + Tail Fall (open to
+    // Peak Land, then close back down over the tail), 2 Fall Only (start open, close through).
+    void  setFilterMotionMode(int m)    { filterMotionMode.store(juce::jlimit(0, 2, m)); markDirty(); }
+    int   getFilterMotionMode() const   { return filterMotionMode.load(); }
     void  setFilterDrive(float d)       { filterDrive.store(juce::jlimit(0.0f,1.0f,d)); markDirty(); } // Character/Edge
     float getFilterDrive() const        { return filterDrive.load(); }
 
@@ -433,7 +437,7 @@ private:
     std::atomic<float> macroDamage { 0.0f };   // Dust-Vault saturation / age / degradation
     std::atomic<float> macroReveal { 1.0f };   // final filter openness (1 = open/bright, 0 = dark)
     std::atomic<float> macroWidth  { 0.7f };   // mono-safe final stereo width
-    std::atomic<float> macroRingout{ 0.2f };   // aftertail past the landing (0 = off + release fade)
+    std::atomic<float> macroRingout{ 0.35f };  // aftertail past the landing — ON by default
     std::atomic<float> macroLevel  { 0.8f };   // Swell Level output trim (0.8 ≈ 0 dB, range −24..+6)
 
     StereoWidener swellWidener;   // Width macro — Dust 12.47 mono-safe final widener
@@ -452,12 +456,13 @@ private:
     std::atomic<int>  swellLandingSamp { 0 }; // landing point in the rendered swell (= rise length; ringout follows)
     std::atomic<int>  swellTrimIn { 0 }, swellTrimOut { 0 };
     std::atomic<int>  fadeInLen { 0 }, fadeOutLen { 0 };
-    std::atomic<int>  fadeInCurve { FadeLinear }, fadeOutCurve { FadeLinear };
+    std::atomic<int>  fadeInCurve { FadeExp }, fadeOutCurve { FadeLinear };   // Exp = smooth "Expression" rise default
     std::atomic<bool>  filterOn { false }, filterMotion { false };
     std::atomic<float> hpfStartHz { 20.0f }, hpfEndHz { 20.0f };
     std::atomic<float> lpfStartHz { 20000.0f }, lpfEndHz { 20000.0f };
     std::atomic<int>   filterSlope { 1 };       // 0 = 12 dB/oct, 1 = 24 dB/oct (default = strong)
     std::atomic<int>   filterCurve { 0 };       // motion time-curve: 0 Linear 1 Exp 2 Log 3 S
+    std::atomic<int>   filterMotionMode { 0 };  // 0 Rise Only, 1 Rise + Tail Fall, 2 Fall Only
     std::atomic<float> filterDrive { 0.25f };   // Harrison Character/Edge (resonance + analog drive)
     std::atomic<float> pitchSemitones { 0.0f };
     ModernPitchShifter pitchShifter;   // offline render only (message thread)

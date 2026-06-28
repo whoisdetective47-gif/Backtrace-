@@ -267,6 +267,7 @@ juce::var BacktraceProcessor::getStateVar() const
     e->setProperty("lpfEnd",   (double) lpfEndHz.load());
     e->setProperty("filterSlope", filterSlope.load());
     e->setProperty("filterCurve", filterCurve.load());
+    e->setProperty("filterMotionMode", filterMotionMode.load());
     e->setProperty("filterDrive", (double) filterDrive.load());
     o->setProperty("edit", juce::var(e));
 
@@ -298,7 +299,7 @@ void BacktraceProcessor::setStateVar(const juce::var& v)
     macroDamage.store(juce::jlimit(0.0f, 1.0f, macv(mv, "damage", 0.0f)));
     macroReveal.store(juce::jlimit(0.0f, 1.0f, macv(mv, "reveal", 1.0f)));
     macroWidth.store (juce::jlimit(0.0f, 1.0f, macv(mv, "width",  0.7f)));
-    macroRingout.store(juce::jlimit(0.0f, 1.0f, macv(mv, "ringout", 0.2f)));
+    macroRingout.store(juce::jlimit(0.0f, 1.0f, macv(mv, "ringout", 0.35f)));   // Ringout ON by default
     macroLevel.store (juce::jlimit(0.0f, 1.0f, macv(mv, "level",  0.8f)));
 
     if (auto* d = o->getProperty("delay").getDynamicObject())
@@ -355,6 +356,7 @@ void BacktraceProcessor::setStateVar(const juce::var& v)
         if (e->hasProperty("lpfEnd"))   lpfEndHz.store  ((float) (double) e->getProperty("lpfEnd"));
         if (e->hasProperty("filterSlope")) filterSlope.store((int) e->getProperty("filterSlope"));
         if (e->hasProperty("filterCurve")) filterCurve.store((int) e->getProperty("filterCurve"));
+        if (e->hasProperty("filterMotionMode")) filterMotionMode.store((int) e->getProperty("filterMotionMode"));
         if (e->hasProperty("filterDrive")) filterDrive.store((float) (double) e->getProperty("filterDrive"));
     }
 
@@ -845,7 +847,9 @@ void BacktraceProcessor::regenerateSwell()
     {
         swellTrimIn.store(0);
         swellTrimOut.store(len);
-        fadeInLen.store (juce::jmin(len / 4, (int) (currentSR * 0.005)));   // default short safety fades
+        // Subtle ~7% start fade ON by default (with the Exp curve) so the rise begins
+        // smoothly without hiding the swell shape; the tail end keeps a short safety fade.
+        fadeInLen.store (juce::jlimit(0, len / 2, (int) (len * 0.07f)));
         fadeOutLen.store(juce::jmin(len / 4, (int) (currentSR * 0.008)));
     }
 
@@ -1061,12 +1065,32 @@ void BacktraceProcessor::applyFilterMotion(juce::AudioBuffer<float>& buf, int le
         }
     };
 
+    // Motion Mode pivots the sweep on PEAK LAND (the landing), not the buffer end. The
+    // ringout after the landing is where the tail HOLDS (Rise Only) or FALLS back (Tail Fall).
+    const int   mmode    = filterMotionMode.load();
+    const int   landSamp = swellLandingSamp.load() - swellTrimIn.load();
+    const float landFrac = juce::jlimit(0.05f, 0.98f, (len > 1) ? (float) landSamp / (float) len : 0.85f);
+    auto motionT = [mmode, landFrac, &shape](float p) -> float   // p 0..1 → t 0 (start A) .. 1 (Peak Land B)
+    {
+        switch (mmode)
+        {
+            case 1:  // Rise + Tail Fall — A→B by the landing, then B→A back down over the tail
+                return (p <= landFrac) ? shape(p / landFrac)
+                                       : 1.0f - shape((p - landFrac) / juce::jmax(1.0e-4f, 1.0f - landFrac));
+            case 2:  // Fall Only — start open at B, close to A through the whole swell + tail
+                return 1.0f - shape(p);
+            default: // 0 Rise Only — A→B by the landing, then HOLD B over the tail
+                return (p <= landFrac) ? shape(p / landFrac) : 1.0f;
+        }
+    };
+
     TptSvf hp[2][2], lp[2][2];   // [channel][section]
     const int blk = 64;
     for (int start = 0; start < len; start += blk)
     {
         const int   n  = juce::jmin(blk, len - start);
-        const float t  = shape((len > 1) ? (float) start / (float) (len - 1) : 0.0f);
+        const float p  = (len > 1) ? (float) start / (float) (len - 1) : 0.0f;
+        const float t  = motionT(p);
         const float fcHP = juce::jmin(nyq, motion ? std::exp(juce::jmap(t, lnHpA, lnHpB)) : std::exp(lnHpA));
         const float fcLP = juce::jmin(nyq, motion ? std::exp(juce::jmap(t, lnLpA, lnLpB)) : std::exp(lnLpA));
         const float gHP = std::tan(juce::MathConstants<float>::pi * fcHP / (float) currentSR);
@@ -1172,7 +1196,6 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
     // Every Tail Type builds a FORWARD wet tail and then reverses it — that's the swell.
     // The Tail Type only changes WHICH FX generate the tail (handled in applySwellFX).
     const bool reverseSrc  = false;
-    const bool reverseTail = true;
 
     dest.clear();
 
@@ -1187,12 +1210,14 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
     // reverb decay), or repeats that fall past the window are lost and the delay seems to
     // "not catch". Size = max(swell-fit budget, source + measured FX tail + margin).
     const int fxTail = hasFX ? (tailLen() + reverbTailLen()) : 0;
-    // The tail now DECAYS within ~one swell length, so the window only needs to reach a
-    // little past the -40 dB point (no more 2×swellLen sustain budget) — smaller buffer =
-    // faster render + far less memory churn. Delay modes still get room for their repeats.
+    // The render window must hold: source + the swell-length rise tail + the requested
+    // Ringout aftertail + margin. Sizing it to include the ringout is what lets EVERY reverb
+    // continue its natural decay PAST the landing (the ringout reads this forward tail) — no
+    // reverb gets hard-cut at the swell end. Delay modes still get room for their repeats.
+    const int wantRing = hasFX ? swellRingoutSamples() : 0;
     const int renderLen = hasFX
-        ? juce::jlimit(selLen + 1, (int) (currentSR * 24.0),
-                       juce::jmax(selLen + swellLen + (int) (currentSR * 0.7),
+        ? juce::jlimit(selLen + 1, (int) (currentSR * 30.0),
+                       juce::jmax(selLen + swellLen + wantRing + (int) (currentSR * 0.7),
                                   selLen + fxTail + (int) (currentSR * 0.5)))
         : selLen;
     if (renderWork.getNumChannels() < 2 || renderWork.getNumSamples() < renderLen)
@@ -1267,54 +1292,70 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
     // Build the swell from the wet TAIL after Source End / Tail Start. Everything before
     // the marker is the source-feed region (FX excited by the source) and is skipped, so
     // the reverse lands on the post-source tail — the classic reverse-reverb/delay move.
-    const int tailStart = juce::jlimit(0, juce::jmax(0, washLen - 2), tailStartFixed);
-    const int tailLen   = washLen - tailStart;
-    if (tailLen >= swellLen)
+    const int tailStart = juce::jlimit(0, juce::jmax(0, renderLen - 2), tailStartFixed);
+    const int avail     = renderLen - tailStart;                          // forward tail from the marker
+    const int tailLen   = juce::jlimit(0, avail, washLen - tailStart);    // -40 dB span (info / log only)
+
+    if (avail >= swellLen)
     {
-        // tail[tailStart .. tailStart+swellLen] reversed → quiet far-tail rising into the
-        // loud just-after-source landing at the end. No stretch (the real producer move).
+        // No stretch (the producer move): reverse exactly swellLen of the forward tail —
+        // quiet far-tail → loud just-after-source landing at the end. work stays intact.
         for (int c = 0; c < dest.getNumChannels(); ++c)
         {
             const int sc = juce::jmin(c, work.getNumChannels() - 1);
-            if (reverseTail)
-                for (int i = 0; i < swellLen; ++i)
-                    dest.getWritePointer(c)[i] = work.getReadPointer(sc)[tailStart + swellLen - 1 - i];
-            else
-                dest.copyFrom(c, 0, work, sc, tailStart, swellLen);
+            const float* w = work.getReadPointer(sc);
+            float* d = dest.getWritePointer(c);
+            for (int i = 0; i < swellLen; ++i) d[i] = w[tailStart + swellLen - 1 - i];
         }
     }
     else
     {
-        // Tail shorter than the swell → reverse the tail region and fit it to length.
-        if (reverseTail)
-            for (int c = 0; c < work.getNumChannels(); ++c)
-                std::reverse(work.getWritePointer(c) + tailStart, work.getWritePointer(c) + washLen);
+        // Rare (only if the 30 s window cap can't supply a full swell): reverse a COPY of
+        // the available tail and fit it to length — never reverse the shared work buffer,
+        // so the forward tail survives for the ringout below.
+        std::vector<float> tmp((size_t) juce::jmax(1, avail));
         for (int c = 0; c < dest.getNumChannels(); ++c)
         {
-            const float* src = work.getReadPointer(juce::jmin(c, work.getNumChannels() - 1)) + tailStart;
+            const int sc = juce::jmin(c, work.getNumChannels() - 1);
+            const float* w = work.getReadPointer(sc);
+            for (int i = 0; i < avail; ++i) tmp[(size_t) i] = w[tailStart + avail - 1 - i];
+            float* d = dest.getWritePointer(c);
             if (keepPitch.load())
-                btPhaseVocoderStretch(src, tailLen, dest.getWritePointer(c), swellLen);   // pitch-preserved
-            else
-            {
-                juce::LagrangeInterpolator interp;
-                interp.process((double) tailLen / juce::jmax(1, swellLen), src, dest.getWritePointer(c), swellLen);
-            }
+                btPhaseVocoderStretch(tmp.data(), avail, d, swellLen);
+            else { juce::LagrangeInterpolator in; in.process((double) avail / juce::jmax(1, swellLen), tmp.data(), d, swellLen); }
         }
     }
 
-    // ---- Aftertail / ringout: continue the FORWARD wet tail PAST the landing so the
-    // swell decays naturally instead of dead-stopping on its loudest sample. The reversed
-    // rise lands on work[tailStart] (= dest[swellLen-1]); the forward tail work[tailStart+1..]
-    // continues seamlessly from there (same sample value at the seam → no click). Only when
-    // the natural (un-stretched) tail was used, and clamped to the tail actually rendered so
-    // we never print invented silence. The Landing marker stays at swellLen; ringout follows.
+    // ---- SHARED ringout: continue the FORWARD wet tail PAST the landing for EVERY reverb.
+    // The rise lands on work[tailStart] (= dest[swellLen-1]); work[tailStart+1 ..] continues
+    // it seamlessly. Clamp to where the forward tail naturally falls to ~-60 dB, so SHORT
+    // reverbs ring their full natural length and LONG ones fill the requested Ringout —
+    // never the -40 dB rise point, never per-flavor gated. (The old code gated on
+    // tailLen >= swellLen and clamped to -40 dB, so only the longest-tail reverbs rang out.)
     int ringout = 0;
-    if (tailLen >= swellLen)
-        ringout = juce::jlimit(0, juce::jmax(0, washLen - tailStart - 1), swellRingoutSamples());
+    if (avail >= swellLen)
+    {
+        const int want = swellRingoutSamples();
+        if (want > 0)
+        {
+            float pk = 0.0f;
+            for (int c = 0; c < work.getNumChannels(); ++c)
+                pk = juce::jmax(pk, work.getMagnitude(c, tailStart, swellLen));
+            const float thr = juce::jmax(1.0e-5f, pk * 0.001f);            // ~-60 dB of the landing region
+            int fe = tailStart + 1;
+            for (int c = 0; c < work.getNumChannels(); ++c)
+            {
+                const float* w = work.getReadPointer(c);
+                for (int i = renderLen - 1; i > fe; --i)
+                    if (std::abs(w[i]) > thr) { fe = i; break; }
+            }
+            ringout = juce::jlimit(0, juce::jmax(0, fe - tailStart - 1), want);
+        }
+    }
 
     const int outLen = swellLen + ringout;
     if (dest.getNumSamples() < outLen || dest.getNumChannels() < 2)
-        dest.setSize(2, outLen, true, true, true);   // keep the rise, zero the new tail region
+        dest.setSize(2, outLen, true, true, true);   // keep the rise, zero any new tail region
     for (int c = 0; c < dest.getNumChannels(); ++c)
     {
         const int sc = juce::jmin(c, work.getNumChannels() - 1);

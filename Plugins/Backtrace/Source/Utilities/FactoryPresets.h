@@ -56,13 +56,14 @@ namespace btpreset
     }
 
     // Neutral INIT state — pitch 0, no extreme FX. Used for fresh insert + Reset
-    // so Backtrace NEVER starts on a pitched/odd default. Velvet Hall at a modest
-    // mix gives an audible-but-clean reverse swell out of the box.
+    // so Backtrace NEVER starts on a pitched/odd default. Ghost Shimmer at a modest
+    // mix is the default reverb: a lush, blooming reverse swell out of the box.
     inline juce::var initState()
     {
         // Reverb Swell = the classic producer move (reverb tail → reverse), so a fresh
-        // insert nails the main Backtrace product out of the box.
-        return buildState(0, {}, 1, { {"mix", 0.25f} }, "reverb_swell", 0.0f, false);
+        // insert nails the main Backtrace product out of the box. Default reverb = Ghost
+        // Shimmer (flavor 3). Fade/Ringout/Motion defaults live in the processor atomics.
+        return buildState(0, {}, 3, { {"mix", 0.30f} }, "reverb_swell", 0.0f, false);
     }
 
     struct FactoryDef { juce::String name, category; juce::var state; };

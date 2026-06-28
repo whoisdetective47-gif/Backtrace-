@@ -86,6 +86,19 @@ static double hflfRatio(const juce::AudioBuffer<float>& b, int a, int e, double 
     return hfE / juce::jmax(1.0e-12, lfE);
 }
 
+static double maxAbsDiff(const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+{
+    const int n  = juce::jmin(a.getNumSamples(),  b.getNumSamples());
+    const int ch = juce::jmin(a.getNumChannels(), b.getNumChannels());
+    double m = 0.0;
+    for (int c = 0; c < ch; ++c)
+    {
+        const float* x = a.getReadPointer(c); const float* y = b.getReadPointer(c);
+        for (int i = 0; i < n; ++i) m = juce::jmax(m, (double) std::abs(x[i] - y[i]));
+    }
+    return m;
+}
+
 static void setReverb(BacktraceProcessor& p, int flavor)
 {
     p.setReverbFlavor(flavor);
@@ -166,6 +179,31 @@ int main()
               "landing=" + juce::String(landing) + " (~2 bars @120 = " + juce::String((int) (SR * 4.0)) + ")");
     }
 
+    // ---- 1b. RINGOUT IS GLOBAL: it must work IDENTICALLY for every reverb algorithm.
+    // (Regression guard for the shared-tail refactor — 626 / Ghost Shimmer used to hard-cut
+    // at the landing because ringout was gated on the natural -40 dB tail reaching swellLen.)
+    std::printf("1b. Ringout global across ALL reverbs:\n");
+    {
+        loadVocal();
+        proc.setDelayFlavor(0);
+        proc.setRoutingMode((int) RoutingMode::ReverbSwell);
+        proc.setSwellBars(2);
+        proc.setMacroRingout(0.3f);
+        for (int fl = 1; fl <= 5; ++fl)
+        {
+            setReverb(proc, fl);
+            auto b = createSwell(proc, tmp, landing, sr);
+            const int    len     = b.getNumSamples();
+            const double tailRms = rms(b, landing, len);
+            const float  endPeak = peakRange(b, len - (int) (SR * 0.001), len);
+            const auto   nm      = reverbFlavorName(fl);
+            check(nm + " extends past landing", len > landing + (int) (SR * 0.10),
+                  "len=" + juce::String(len) + " landing=" + juce::String(landing));
+            check(nm + " audible ringout tail",  tailRms > 0.01, "tailRMS=" + juce::String(tailRms, 4));
+            check(nm + " no hard-cut at clip end", endPeak < 0.03f, "endPeak=" + juce::String(endPeak, 4));
+        }
+    }
+
     // ---- 2. DETERMINISM: same settings → bit-identical render (5x) --------------------
     std::printf("2. Determinism (full render path, Digital Pedal delay swell):\n");
     {
@@ -242,6 +280,44 @@ int main()
         const double lfEnd   = std::sqrt(1.0 / juce::jmax(1.0e-9, hflfRatio(bh, landing - q2, landing, 400.0)));
         check("HPF off->2k thins low end by the landing", lfEnd < lfStart * 0.8,
               "LFshare start=" + juce::String(lfStart, 4) + " end=" + juce::String(lfEnd, 4));
+    }
+
+    // ---- 4b. MOTION MODE: Rise Only holds at Peak Land through the tail; Rise+Fall closes
+    // back down over the tail; Fall Only starts open. Measured via LPF brightness, with
+    // B (= Peak Land) set OPEN/bright so the modes diverge in the post-landing tail. --------
+    std::printf("4b. Motion Mode (post-landing filter return):\n");
+    {
+        loadVocal();
+        setReverb(proc, 1); proc.setDelayFlavor(0);                 // Velvet Hall (clean HF for the measurement)
+        proc.setRoutingMode((int) RoutingMode::ReverbSwell);
+        proc.setSwellBars(2); proc.setMacroRingout(0.45f);          // a clear tail to fall over
+        proc.setFilterOn(true); proc.setFilterMotion(true); proc.setFilterSlope(1); proc.setFilterCurve(0);
+        proc.setLpfStart(20000.0f); proc.setLpfEnd(20000.0f);       // LPF off
+        proc.setHpfStart(20.0f); proc.setHpfEnd(1500.0f);           // A=20 (full lows) -> B=1500 = Peak Land ("open"/thin)
+
+        proc.setFilterMotionMode(0); auto bRise  = createSwell(proc, tmp, landing, sr); const int lenR = bRise.getNumSamples();
+        proc.setFilterMotionMode(1); auto bFall  = createSwell(proc, tmp, landing, sr); const int lenF = bFall.getNumSamples();
+        proc.setFilterMotionMode(2); auto bFonly = createSwell(proc, tmp, landing, sr);
+
+        // LF share (sub-300 Hz energy / total) — HIGH = full lows, LOW = thinned by the HPF.
+        auto lfShare = [&](const juce::AudioBuffer<float>& b, int a, int e)
+        { return std::sqrt(1.0 / juce::jmax(1.0e-9, hflfRatio(b, a, e, 300.0))); };
+        auto tailLF = [&](const juce::AudioBuffer<float>& b, int len)   // latter half of the tail
+        { return lfShare(b, landing + (len - landing) / 2, len); };
+
+        const double riseTail = tailLF(bRise, lenR);   // HPF held thin → fewer lows
+        const double fallTail = tailLF(bFall, lenF);   // HPF returns to 20 → lows restored
+        check("Rise+Fall restores lows in tail vs Rise Only held thin", fallTail > riseTail * 1.3,
+              "fallTailLF=" + juce::String(fallTail, 3) + " riseTailLF=" + juce::String(riseTail, 3));
+
+        const double riseStart  = lfShare(bRise,  0, landing / 4);   // starts at A=20 → full lows
+        const double fonlyStart = lfShare(bFonly, 0, landing / 4);   // Fall Only starts at Peak Land → thin
+        check("Fall Only starts at Peak Land (thinner start than Rise)", riseStart > fonlyStart * 1.3,
+              "riseStartLF=" + juce::String(riseStart, 3) + " fonlyStartLF=" + juce::String(fonlyStart, 3));
+
+        check("all 3 motion modes render distinct buffers",
+              maxAbsDiff(bRise, bFall) > 1e-4 && maxAbsDiff(bRise, bFonly) > 1e-4 && maxAbsDiff(bFall, bFonly) > 1e-4,
+              "RvF=" + juce::String(maxAbsDiff(bRise, bFall), 5) + " RvFo=" + juce::String(maxAbsDiff(bRise, bFonly), 5));
     }
 
     // ---- 5. NATURAL SWELL SHAPE: rising over the rise region, Pull contrast ----------

@@ -127,6 +127,11 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     filterCurveBox.onChange = [this] { proc.setFilterCurve(filterCurveBox.getSelectedId() - 1); refreshSwellCanvas(); };
     filterCurveBox.setTooltip("Motion time-curve (cutoff always sweeps in log-frequency space).");
     addAndMakeVisible(filterCurveBox);
+    // Motion Mode — what the sweep does relative to Peak Land (the landing).
+    filterMotionModeBox.addItem("Rise Only", 1); filterMotionModeBox.addItem("Rise+Fall", 2); filterMotionModeBox.addItem("Fall Only", 3);
+    filterMotionModeBox.onChange = [this] { proc.setFilterMotionMode(filterMotionModeBox.getSelectedId() - 1); refreshSwellCanvas(); };
+    filterMotionModeBox.setTooltip("Motion Mode: Rise Only = open to Peak Land and hold.  Rise+Fall = open to Peak Land, then close back down over the tail.  Fall Only = start open and close through the whole swell + tail.");
+    addAndMakeVisible(filterMotionModeBox);
     filterDriveKnob.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     filterDriveKnob.setRange(0.0, 1.0, 0.01);
     filterDriveKnob.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 56, 15);
@@ -1340,6 +1345,7 @@ void BacktraceEditor::syncFilterControls()
     lpfEndKnob.setValue(proc.getLpfEnd(), juce::dontSendNotification);
     filterSlopeBox.setSelectedId(proc.getFilterSlope() + 1, juce::dontSendNotification);
     filterCurveBox.setSelectedId(proc.getFilterCurve() + 1, juce::dontSendNotification);
+    filterMotionModeBox.setSelectedId(proc.getFilterMotionMode() + 1, juce::dontSendNotification);
     filterDriveKnob.setValue(proc.getFilterDrive(), juce::dontSendNotification);
 
     const bool on = proc.getFilterOn();
@@ -1348,7 +1354,8 @@ void BacktraceEditor::syncFilterControls()
     hpfEndKnob.setEnabled(motion); lpfEndKnob.setEnabled(motion);
     hpfEndKnob.setAlpha(motion ? 1.0f : 0.4f);
     lpfEndKnob.setAlpha(motion ? 1.0f : 0.4f);
-    filterSlopeBox.setEnabled(on); filterDriveKnob.setEnabled(on); filterCurveBox.setEnabled(motion);
+    filterSlopeBox.setEnabled(on); filterDriveKnob.setEnabled(on);
+    filterCurveBox.setEnabled(motion); filterMotionModeBox.setEnabled(motion);
     hpfEndLabel.setAlpha(motion ? 1.0f : 0.4f);
     lpfEndLabel.setAlpha(motion ? 1.0f : 0.4f);
     filterMotionToggle.setEnabled(on);
@@ -1466,13 +1473,20 @@ void BacktraceEditor::timerCallback()
     {
         const int   pl = proc.getPlayLen();
         const float tt = pl > 0 ? juce::jlimit(0.0f, 1.0f, (float) proc.getPlayPos() / (float) pl) : 0.0f;
-        float t = tt;
-        switch (proc.getFilterCurve())   // identical shaping to applyFilterMotion()
+        const int   curve = proc.getFilterCurve();
+        auto shapeC = [curve](float x) -> float   // identical time-curve to applyFilterMotion()
         {
-            case 1:  t = tt * tt;                          break;   // Exp
-            case 2:  t = 1.0f - (1.0f - tt) * (1.0f - tt); break;   // Log
-            case 3:  t = tt * tt * (3.0f - 2.0f * tt);     break;   // S-Curve
-            default: break;                                         // Linear
+            switch (curve) { case 1: return x * x; case 2: return 1.0f - (1.0f - x) * (1.0f - x);
+                             case 3: return x * x * (3.0f - 2.0f * x); default: return x; }
+        };
+        // Pivot the visual on Peak Land (the landing), following the same Motion Mode as the DSP.
+        const float lf = juce::jlimit(0.05f, 0.98f, pl > 0 ? (float) proc.getSwellLanding() / (float) pl : 0.85f);
+        float t;
+        switch (proc.getFilterMotionMode())
+        {
+            case 1:  t = (tt <= lf) ? shapeC(tt / lf) : 1.0f - shapeC((tt - lf) / juce::jmax(1.0e-4f, 1.0f - lf)); break;
+            case 2:  t = 1.0f - shapeC(tt); break;
+            default: t = (tt <= lf) ? shapeC(tt / lf) : 1.0f; break;
         }
         auto interp = [t](float a, float b)   // log-frequency interpolation, like the DSP
         { return std::exp(juce::jmap(t, std::log(juce::jmax(20.0f, a)), std::log(juce::jmax(20.0f, b)))); };
@@ -1690,13 +1704,17 @@ void BacktraceEditor::resized()
         a.removeFromTop(3);
         {
             auto row = a.removeFromTop(22);
-            filterCaption.setBounds(row.removeFromLeft(60).withTrimmedTop(5));
-            filterToggle.setBounds(row.removeFromRight(56).withTrimmedTop(2));
-            filterMotionToggle.setBounds(row.removeFromRight(70).withTrimmedTop(2));
+            filterCaption.setBounds(row.removeFromLeft(46).withTrimmedTop(5));
+            // Filter BEFORE Motion (Motion depends on Filter being engaged): Filter on the
+            // left, Motion to its right.
+            filterMotionToggle.setBounds(row.removeFromRight(64).withTrimmedTop(2));   // Motion (rightmost)
+            filterToggle.setBounds(row.removeFromRight(54).withTrimmedTop(2));         // Filter (left of Motion)
             row.removeFromLeft(2);
-            filterSlopeBox.setBounds(row.removeFromLeft(74));
-            row.removeFromLeft(4);
-            filterCurveBox.setBounds(row);
+            filterSlopeBox.setBounds(row.removeFromLeft(68));               // fits "24 dB"
+            row.removeFromLeft(3);
+            filterMotionModeBox.setBounds(row.removeFromRight(90));         // fixed — fits "Rise+Fall"
+            row.removeFromRight(3);
+            filterCurveBox.setBounds(row);   // time-curve gets the remaining middle (fits "S-Curve")
         }
         {
             auto fr = a.removeFromTop(56);
