@@ -1500,7 +1500,7 @@ void BacktraceEditor::timerCallback()
     {
         const int    lat = proc.getLatencySamples();
         const double ms  = 1000.0 * lat / juce::jmax(1.0, proc.getCurrentSampleRate());
-        const juce::String s = live ? ("DAW preverb - " + juce::String(ms, 0) + " ms latency"
+        const juce::String s = live ? (proc.liveRangeLabel() + " - " + juce::String(ms, 0) + " ms"
                                        + (proc.liveReady() ? juce::String() : juce::String("  loading...")))
                                     : juce::String("Capture / Print mode");
         if (s != liveStatusLabel.getText()) liveStatusLabel.setText(s, juce::dontSendNotification);

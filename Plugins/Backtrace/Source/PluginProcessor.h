@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include <mutex>
 #include "Vault/CaptureEngine.h"
 #include "Audio/SyncCapture.h"
 #include "Audio/ReverseEngine.h"
@@ -281,6 +282,9 @@ public:
     { static const char* n[] = { "1/32","1/16","1/8","1/4","1/2","1 bar","2 bars","4 bars" };
       static const char* f[] = { "Straight","Dotted","Triplet" };
       return juce::String(n[juce::jlimit(0,7,liveTimeIndex.load())]) + " " + f[juce::jlimit(0,2,liveFeel.load())]; }
+    // Musical range of the selected time: 1/2+ = PREVERB swell, 1/4-1/8 = TIGHT, 1/16-1/32 = MICRO smear.
+    juce::String  liveRangeLabel() const
+    { const int i = liveTimeIndex.load(); return i <= 1 ? "MICRO" : i <= 3 ? "TIGHT" : "PREVERB"; }
     void  requestLiveIR()       { liveIRRequested.store(true); if (renderThread) renderThread->notify(); }
     void  rebuildLiveIR();                  // worker: render reverb tail of an impulse → reverse → load
     int   preverbLengthSamples() const;     // pre-swell length (samples), DAW-tempo-locked
@@ -421,7 +425,8 @@ private:
     void applyPitch(juce::AudioBuffer<float>& buf, int len, float semitones);  // offline, latency-compensated
     void applyDelay(juce::AudioBuffer<float>& buf, int total, bool wetOnly = false, double fillSec = 0.0);
     void applyReverb(juce::AudioBuffer<float>& buf, int total, bool wetOnly = false, double fillSec = 0.0,
-                     float decayOverride = -1.0f, float density = 0.0f, float shimmerScale = 1.0f);
+                     float decayOverride = -1.0f, float density = 0.0f, float shimmerScale = 1.0f,
+                     float predelayScale = 1.0f);
     int  renderSwell(juce::AudioBuffer<float>& dest, int swellLen);   // wet-only reversed swell, end-aligned
     int  renderTail (juce::AudioBuffer<float>& dest);                 // FORWARD wet tail (Audition Tail, pre-reverse)
     void applySwellFX(juce::AudioBuffer<float>& buf, int total, int mode, double fillSec,
@@ -532,6 +537,7 @@ private:
     std::atomic<bool>  liveIRRequested { false }; // worker should rebuild the preverb IR
     std::atomic<int>   liveLatencyApplied { -1 }; // last latency pushed to the host
     std::atomic<bool>  dspPrepared { false };     // true only after prepareToPlay — gates worker DSP use
+    std::mutex         liveIRMutex;               // serialises live-IR rebuilds (worker vs any direct call)
 
     std::vector<PresetEntry> presets;
     int  currentPreset = 0;
@@ -559,7 +565,11 @@ private:
                 while (owner.renderRequested.exchange(false))  // coalesce queued requests (latest params win)
                 {   owner.regenerateSwell(); didRender = true; }
                 if (owner.liveIRRequested.exchange(false))     // Live Preverb kernel rebuild (same thread = no reverb-object race)
-                    owner.rebuildLiveIR();
+                {
+                    juce::Thread::sleep(40);                    // debounce: coalesce knob-drag bursts into ONE rebuild
+                    owner.liveIRRequested.store(false);        // take the latest settled params
+                    owner.rebuildLiveIR();                     // off the audio thread, atomic kernel swap
+                }
                 owner.rendering.store(false);
                 if (didRender) owner.renderDone.store(true);   // IR-only passes must NOT signal a swell render
             }

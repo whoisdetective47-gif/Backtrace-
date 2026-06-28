@@ -559,7 +559,60 @@ int main()
               "fullWetPeak=" + juce::String(fullWet, 3) + " (in 0.5)");
         check("default Mix 25% not louder than the dry source", defMix <= 0.6f,
               "defMixPeak=" + juce::String(defMix, 3) + " (dry 0.5)");
-        proc.setMacroMix(0.25f);
+
+        // Build + settle the live kernel for a given TIME / octave, feed an impulse, capture.
+        auto liveImpulse = [&](int timeIdx, float pitch) -> juce::AudioBuffer<float>
+        {
+            proc.setLiveTimeIndex(timeIdx); proc.setLiveFeel(0); proc.setPitchSemitones(pitch);
+            proc.setMacroMix(1.0f); proc.setLiveWet(1.0f); proc.setLiveDry(0.0f);
+            proc.rebuildLiveIR();
+            juce::AudioBuffer<float> warm(2, 512); int w = 0;
+            while (! proc.liveConvLoaded() && w < 4000) { juce::Thread::sleep(20); w += 20; }
+            juce::Thread::sleep(80);
+            for (int k = 0; k < 90; ++k)
+            { warm.clear(); juce::AudioBuffer<float> ws(warm.getArrayOfWritePointers(), 2, 512); proc.liveProcessBlock(ws); }
+            const int lat = proc.getLatencySamples();
+            const int total = juce::jmax(1024, lat * 2);
+            juce::AudioBuffer<float> out(2, total); out.clear();
+            int pos = 0; juce::AudioBuffer<float> blk(2, 512);
+            while (pos < total)
+            {
+                const int n = juce::jmin(512, total - pos); blk.clear();
+                for (int i = 0; i < n; ++i) if (pos + i == 240) { blk.setSample(0, i, 1.0f); blk.setSample(1, i, 1.0f); }
+                juce::AudioBuffer<float> sub(blk.getArrayOfWritePointers(), 2, n); proc.liveProcessBlock(sub);
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < n; ++i) out.setSample(c, pos + i, sub.getSample(c, i));
+                pos += n;
+            }
+            return out;
+        };
+
+        // 1/16 MICRO must still produce an audible preverb (not go dry/silent) — the
+        // Phase-1.6B complaint. Continuous noise → measure STEADY-STATE output, so the result
+        // is independent of the async kernel-swap timing.
+        { setReverb(proc, 3); proc.setLiveTimeIndex(1); proc.setLiveFeel(0); proc.setPitchSemitones(0.0f);
+          proc.setMacroMix(1.0f); proc.setLiveWet(1.0f); proc.setLiveDry(0.0f);
+          proc.rebuildLiveIR();
+          int w = 0; while (! proc.liveConvLoaded() && w < 4000) { juce::Thread::sleep(20); w += 20; }
+          juce::Thread::sleep(120);
+          juce::Random rng(7); juce::AudioBuffer<float> nb(2, 512); double sum = 0.0; int cnt = 0;
+          for (int k = 0; k < 220; ++k)
+          {
+              for (int i = 0; i < 512; ++i) { const float s = (rng.nextFloat() * 2.0f - 1.0f) * 0.4f; nb.setSample(0, i, s); nb.setSample(1, i, s); }
+              juce::AudioBuffer<float> ns(nb.getArrayOfWritePointers(), 2, 512);
+              proc.liveProcessBlock(ns);
+              if (k > 140) for (int i = 0; i < 512; ++i) { const float v = ns.getSample(0, i); sum += (double) v * v; ++cnt; }
+          }
+          const double outRms = std::sqrt(sum / juce::jmax(1, cnt));
+          check("1/16 micro produces an audible preverb (not silent/dry)", outRms > 0.01,
+                "outRms=" + juce::String(outRms, 4) + " " + proc.liveTimeLabel()); }
+
+        // OCTAVE must audibly change the live kernel (was dead in live mode).
+        { setReverb(proc, 3);
+          auto o0 = liveImpulse(3, 0.0f);                // 1/4, no octave
+          auto oU = liveImpulse(3, 12.0f);               // 1/4, +1 octave
+          check("octave audibly changes the live kernel", maxAbsDiff(o0, oU) > 1.0e-3,
+                "maxDiff=" + juce::String(maxAbsDiff(o0, oU), 5)); }
+        proc.setPitchSemitones(0.0f); proc.setMacroMix(0.25f);
 
         proc.setLiveMode(false);                       // restore Capture mode default
     }

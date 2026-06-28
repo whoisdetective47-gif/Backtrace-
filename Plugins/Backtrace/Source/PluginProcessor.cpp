@@ -1183,6 +1183,7 @@ void BacktraceProcessor::rebuildLiveIR()
     // build — BEFORE prepareToPlay, and using unprepared DSP crashes. prepareToPlay
     // re-requests the build once everything is ready.
     if (! dspPrepared.load()) { liveIRRequested.store(true); return; }
+    const std::lock_guard<std::mutex> lk(liveIRMutex);   // never let two rebuilds touch the reverb objects at once
 
     juce::ScopedNoDenormals noDenormals;
     const int M  = preverbLengthSamples();
@@ -1192,18 +1193,46 @@ void BacktraceProcessor::rebuildLiveIR()
     ir.setSample(0, 0, 1.0f);                              // unit impulse → its reverb tail = the kernel
     ir.setSample(1, 0, 1.0f);
 
+    const double mSec  = (double) M / juce::jmax(1.0, currentSR);
+    // MICRO factor: 1 at very short windows (1/16, 1/32), 0 by ~300 ms. Short windows have no
+    // room for pre-delay + a long decay, so we scale the reverb TO the window — otherwise the
+    // IR is mostly pre-delay silence + fade and the preverb goes dry/silent ("stops reversing").
+    const float micro  = juce::jlimit(0.0f, 1.0f, (0.30f - (float) mSec) / 0.30f);
     if (reverbFlavor.load() != 0)
     {
-        const double mSec   = (double) M / juce::jmax(1.0, currentSR);
-        // Shorter, more-damped tail than the offline render: a long high-Q reverb tail rings
-        // and RESONATES (sustained/tonal sources build up loud and harsh). A controlled decay
-        // gives a smooth bloom into the landing, less mud, and far less resonant buildup.
-        const float  decayOv = juce::jlimit(0.22f, 0.55f, 0.22f + (float) mSec * 0.05f);
-        applyReverb(ir, M, /*wetOnly*/ true, mSec, decayOv, 0.08f, /*shimmerScale*/ 0.25f);
+        const float decayOv  = juce::jlimit(0.18f, 0.55f, 0.18f + (float) mSec * 0.05f);   // controlled, no resonant ring
+        const float preScale = juce::jlimit(0.05f, 1.0f, (float) mSec / 0.50f);            // shrink pre-delay for short windows
+        const float density  = 0.08f + micro * 0.45f;                                       // denser → smooth short smear
+        const float shim     = juce::jlimit(0.0f, 1.0f, 0.25f * (1.0f - micro * 0.5f));     // octave handled by IR pitch-shift below
+        applyReverb(ir, M, /*wetOnly*/ true, mSec, decayOv, density, shim, preScale);
     }
 
     for (int c = 0; c < ch; ++c)                           // reverse → preverb (quiet build-up → loud landing)
         std::reverse(ir.getWritePointer(c), ir.getWritePointer(c) + M);
+
+    // OCTAVE / Pitch — resample the reversed kernel to shift its pitch (a genuinely higher /
+    // lower preverb), keeping the LANDING aligned at the end (M). Cheap (one resample), and
+    // only when nonzero. Works at every Swell Time (subtler at micro, but audible — never
+    // "active yet doing nothing"). This is what makes octave respond in Live mode.
+    {
+        const float semis = pitchSemitones.load();
+        if (std::abs(semis) > 0.01f)
+        {
+            const double ratio  = std::pow(2.0, (double) semis / 12.0);          // >1 = up
+            const int    newLen = juce::jlimit(8, M * 4, (int) (M / ratio));
+            juce::AudioBuffer<float> shifted(ch, M); shifted.clear();
+            for (int c = 0; c < ch; ++c)
+            {
+                std::vector<float> tmp((size_t) newLen);
+                juce::LagrangeInterpolator interp;
+                interp.process(ratio, ir.getReadPointer(c), tmp.data(), newLen);  // resample = pitch shift
+                const int copy = juce::jmin(newLen, M);
+                float* d = shifted.getWritePointer(c);
+                for (int i = 0; i < copy; ++i) d[M - copy + i] = tmp[(size_t) (newLen - copy + i)];   // land-aligned
+            }
+            ir.makeCopyOf(shifted);
+        }
+    }
 
     // Tone-shape the kernel: HPF (~150 Hz, de-mud) + gentle LPF (~8 kHz, de-harsh) so the
     // swell is smooth and expensive, not brittle/digital.
@@ -1225,10 +1254,11 @@ void BacktraceProcessor::rebuildLiveIR()
         }
     }
 
-    // Smooth envelope: a long, soft (squared) fade-in on the quiet build-up start + a short
-    // taper on the loud landing end — no abrupt onset, no hard buffer edge.
-    const int fin  = juce::jmin(M / 3, (int) (currentSR * 0.030));
-    const int fout = juce::jmin(M / 8, (int) (currentSR * 0.008));
+    // Smooth envelope PROPORTIONAL to the window: a soft (squared) fade-in on the quiet
+    // build-up + a short landing taper. Scaling with M means short modes still leave most of
+    // the window as usable reverse tail (a fixed 30 ms fade would swallow a 1/16 window).
+    const int fin  = juce::jlimit(8, (int) (currentSR * 0.030), M / 8);
+    const int fout = juce::jlimit(4, (int) (currentSR * 0.008), M / 12);
     for (int c = 0; c < ch; ++c)
     {
         float* d = ir.getWritePointer(c);
@@ -1247,6 +1277,11 @@ void BacktraceProcessor::rebuildLiveIR()
     if (l2 > 1.0e-6) ir.applyGain((float) ((double) kLiveIRGain / l2));
 
     livePreverb.setIR(std::move(ir), currentSR);
+   #if JUCE_DEBUG
+    DBG("[Backtrace liveIR] rebuilt: " << liveTimeLabel() << "  M=" << M
+        << " (" << juce::String(mSec * 1000.0, 0) << " ms)  reverb=" << reverbFlavorName(reverbFlavor.load())
+        << "  oct=" << pitchSemitones.load() << "  micro=" << juce::String(micro, 2));
+   #endif
 }
 
 // Message-thread: report the Live Preverb dry-delay to the host so PDC pulls the
@@ -1723,7 +1758,8 @@ void BacktraceProcessor::applyFeedbackChain(juce::AudioBuffer<float>& buf, int t
 // decayOverride >= 0 drives the Decay slot directly (the length-aware tail-fit loop
 // sets it); density (0..1) adds diffusion/body for longer swells.
 void BacktraceProcessor::applyReverb(juce::AudioBuffer<float>& buf, int total, bool wetOnly,
-                                     double fillSec, float decayOverride, float density, float shimmerScale)
+                                     double fillSec, float decayOverride, float density, float shimmerScale,
+                                     float predelayScale)
 {
     const int flavor = reverbFlavor.load();
     ReverbSpace* space = (flavor == 1) ? (ReverbSpace*) &velvetHall
@@ -1753,6 +1789,7 @@ void BacktraceProcessor::applyReverb(juce::AudioBuffer<float>& buf, int total, b
         }
         if (nm.equalsIgnoreCase("Diffuse")) p[i] = juce::jlimit(0.0f, 1.0f, p[i] + ghost * 0.45f + density * 0.30f);
         if (nm.equalsIgnoreCase("Shimmer")) p[i] = juce::jlimit(0.0f, 1.0f, (p[i] + ghost * 0.45f) * shimmerScale);
+        if (nm.containsIgnoreCase("PreD"))  p[i] *= predelayScale;   // PreDly — shrink for short live windows
         if (nm.equalsIgnoreCase("Mod"))     p[i] = juce::jlimit(0.0f, 1.0f, p[i] + ghost * 0.35f);
         if (nm.equalsIgnoreCase("Width"))   p[i] = juce::jlimit(0.0f, 1.0f, p[i] + ghost * 0.20f);
     }

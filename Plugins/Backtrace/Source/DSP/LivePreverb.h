@@ -121,7 +121,10 @@ public:
     }
 
 private:
-    static constexpr int kConvHead = 512;                                        // NonUniform head = conv latency
+    // The preverb already has seconds of (pre-swell) latency, so a low-latency convolution
+    // head is wasted CPU. A larger head (~43 ms) means far fewer small FFTs → much lower CPU
+    // for long IRs (the main cause of Cubase stalls on longer Swell Times).
+    static constexpr int kConvHead = 2048;                                       // NonUniform head = conv latency
     juce::dsp::Convolution conv { juce::dsp::Convolution::NonUniform { kConvHead } };   // low-CPU partitioned conv
     juce::AudioBuffer<float> wetBuf, dryDelay;
     double sampleRate = 44100.0;
