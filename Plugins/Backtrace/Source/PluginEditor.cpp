@@ -483,6 +483,34 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     }
     applyDelayLayout(0, false);   // initial layout only; syncControlsFromProcessor sets real state
 
+    // --- Live Preverb (Mode 2): real-time DAW-synced reverse reverb ---
+    liveModeToggle.setTooltip("LIVE PREVERB (Mode 2): a real-time, DAW-synced reverse-reverb swell that leads INTO the incoming audio while the song plays. Uses the Swell Length as the Pre-Swell Length and adds that much latency (a mix effect, not zero-latency). Capture/Print mode stays available when this is off.");
+    liveModeToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(0xff7ad1ff));
+    liveModeToggle.onClick = [this]
+    {
+        proc.setLiveMode(liveModeToggle.getToggleState());
+        proc.pushLiveLatencyIfChanged();
+        updateWorkflowHints();
+    };
+    addAndMakeVisible(liveModeToggle);
+
+    liveWetKnob.setSliderStyle(juce::Slider::LinearHorizontal);
+    liveWetKnob.setRange(0.0, 1.5, 0.01);
+    liveWetKnob.setTextBoxStyle(juce::Slider::TextBoxRight, false, 40, 16);
+    liveWetKnob.setColour(juce::Slider::thumbColourId, juce::Colour(0xff7ad1ff));
+    liveWetKnob.onValueChange = [this] { proc.setLiveWet((float) liveWetKnob.getValue()); };
+    liveWetKnob.setTooltip("Live Preverb Wet Amount (the preverb swell level).");
+    addAndMakeVisible(liveWetKnob);
+    liveWetLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.6f));
+    liveWetLabel.setJustificationType(juce::Justification::centredRight);
+    liveWetLabel.setFont(11.0f);
+    addAndMakeVisible(liveWetLabel);
+
+    liveStatusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff7ad1ff).withAlpha(0.85f));
+    liveStatusLabel.setFont(juce::Font(10.0f));
+    liveStatusLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(liveStatusLabel);
+
     // --- reverb space: flavor dropdown + remappable knob cluster ---
     reverbCaption.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.4f));
     reverbCaption.setFont(10.0f);
@@ -798,6 +826,9 @@ void BacktraceEditor::rebuildPresetMenu()
 // preset recall never marks the preset dirty or overwrites the recalled values).
 void BacktraceEditor::syncControlsFromProcessor()
 {
+    liveModeToggle.setToggleState(proc.getLiveMode(), juce::dontSendNotification);
+    liveWetKnob.setValue(proc.getLiveWet(), juce::dontSendNotification);
+
     const int df = proc.getDelayFlavor();
     delayFlavorBox.setSelectedId(df + 1, juce::dontSendNotification);
     delaySyncToggle.setToggleState(proc.getDelaySync(), juce::dontSendNotification);
@@ -1427,6 +1458,20 @@ void BacktraceEditor::timerCallback()
     transportLabel.setText(transportText(), juce::dontSendNotification);
     locatorLabel.setText(locatorText(), juce::dontSendNotification);
 
+    // Live Preverb: push any latency change to the host (message thread) + status readout.
+    proc.pushLiveLatencyIfChanged();
+    const bool live = proc.getLiveMode();
+    if (live != liveModeToggle.getToggleState())
+        liveModeToggle.setToggleState(live, juce::dontSendNotification);
+    {
+        const int    lat = proc.getLatencySamples();
+        const double ms  = 1000.0 * lat / juce::jmax(1.0, proc.getCaptureSampleRate());
+        const juce::String s = live ? ("DAW preverb - " + juce::String(ms, 0) + " ms latency"
+                                       + (proc.liveReady() ? juce::String() : juce::String("  loading...")))
+                                    : juce::String("Capture / Print mode");
+        if (s != liveStatusLabel.getText()) liveStatusLabel.setText(s, juce::dontSendNotification);
+    }
+
     // fallback length selector only matters when a locator mode has no locators
     const bool showFallback = proc.fallbackActive();
     fallbackLabel.setVisible(showFallback);
@@ -1768,8 +1813,16 @@ void BacktraceEditor::resized()
     {
         auto a = juce::Rectangle<int>(692, 80, 300, 560).reduced(8);
         a.removeFromTop(18);   // "FX"
+        {                       // Live Preverb strip (Mode 2)
+            auto row = a.removeFromTop(22);
+            liveModeToggle.setBounds(row.removeFromLeft(120));
+            liveWetLabel.setBounds(row.removeFromLeft(30));
+            liveWetKnob.setBounds(row);
+        }
+        liveStatusLabel.setBounds(a.removeFromTop(12));
+        a.removeFromTop(4);
         {
-            auto row = a.removeFromTop(28);
+            auto row = a.removeFromTop(26);
             pitchCaption.setBounds(row.removeFromLeft(40));
             octDownButton.setBounds(row.removeFromLeft(46));
             pitchValue.setBounds(row.removeFromRight(54));

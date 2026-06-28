@@ -111,6 +111,14 @@ void BacktraceProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     plateVerb.prepare(sampleRate);
     springVerb.prepare(sampleRate);
 
+    livePreverb.prepare(sampleRate, samplesPerBlock, getTotalNumInputChannels());
+    if (liveMode.load()) requestLiveIR();  // build the preverb kernel only when Live mode is active
+    {                                       // report the pre-swell latency up front (IR fills in async)
+        const int est = liveMode.load() ? (livePreverb.convLatency() + preverbLengthSamples() - 1) : 0;
+        setLatencySamples(juce::jmax(0, est));
+        liveLatencyApplied.store(juce::jmax(0, est));
+    }
+
     sOutput.reset(sampleRate, 0.02);
     sOutput.setCurrentAndTargetValue(
         juce::Decibels::decibelsToGain((float) *apvts.getRawParameterValue("output")));
@@ -181,6 +189,12 @@ void BacktraceProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
         playPos.store(pos);
     }
 
+    // ---- Live Preverb (Mode 2): real-time reverse-reverb swell into the delayed dry.
+    // Replaces passthrough with: delayed dry + reversed-IR convolution wet. The host
+    // compensates the reported latency so the preverb lands in front of the source.
+    if (liveMode.load() && ! playPlaying.load())
+        livePreverb.process(buffer, liveWet.load(), liveDry.load());
+
     // Monitor gain. Passthrough otherwise (FX/pitch/routing arrive later).
     sOutput.setTargetValue(
         juce::Decibels::decibelsToGain((float) *apvts.getRawParameterValue("output")));
@@ -216,6 +230,9 @@ juce::var BacktraceProcessor::getStateVar() const
     o->setProperty("pitch",  pitchSemitones.load());
     o->setProperty("land",   landAtSource.load());
     o->setProperty("routing", routingModeName(routingMode.load()));
+    o->setProperty("liveMode", liveMode.load());     // Live Preverb (Mode 2)
+    o->setProperty("liveWet",  (double) liveWet.load());
+    o->setProperty("liveDry",  (double) liveDry.load());
     o->setProperty("preset", (currentPreset >= 0) ? getPresetName(currentPreset) : juce::String());
 
     auto* mac = new juce::DynamicObject();   // global swell macros
@@ -287,6 +304,10 @@ void BacktraceProcessor::setStateVar(const juce::var& v)
     pitchSemitones.store((float) (double) o->getProperty("pitch"));
     landAtSource.store((bool) o->getProperty("land"));
     routingMode.store(routingModeFromName(o->getProperty("routing").toString()));
+    if (o->hasProperty("liveMode")) liveMode.store((bool) o->getProperty("liveMode"));
+    if (o->hasProperty("liveWet"))  liveWet.store((float) (double) o->getProperty("liveWet"));
+    if (o->hasProperty("liveDry"))  liveDry.store((float) (double) o->getProperty("liveDry"));
+    requestLiveIR();                                  // rebuild the preverb kernel for restored settings
 
     // Global swell macros — default to a strong, neutral set when absent (older
     // states / presets without macro data), so Swell is 100% out of the box.
@@ -1123,6 +1144,66 @@ int BacktraceProcessor::swellLengthSamples() const
     if (den <= 0) den = 4;
     const double secPerBar = (4.0 * num / (double) den) * (60.0 / bpm);
     return juce::jmax(1, (int) (swellLenBars.load() * secPerBar * currentSR));
+}
+
+// ===========================================================================
+//  Live Preverb (Mode 2) — real-time DAW-synced reverse reverb
+// ===========================================================================
+
+// Pre-Swell length in samples: reuses the DAW-tempo-locked Swell Length, clamped
+// to a live-friendly window (50 ms .. 8 s) — this is the latency the host compensates.
+int BacktraceProcessor::preverbLengthSamples() const
+{
+    return juce::jlimit((int) (currentSR * 0.05), (int) (currentSR * 8.0), swellLengthSamples());
+}
+
+// Build the reversed-reverb IR (the preverb kernel) and hand it to the convolution.
+// Runs on the RenderThread worker (serialised with offline renders → no race on the
+// shared reverb objects). The reversed forward-reverb tail builds UP to a peak, so
+// convolving the live input makes every sound bloom a swell that LEADS INTO it.
+void BacktraceProcessor::rebuildLiveIR()
+{
+    juce::ScopedNoDenormals noDenormals;
+    const int M  = preverbLengthSamples();
+    const int ch = 2;
+    juce::AudioBuffer<float> ir(ch, M);
+    ir.clear();
+    ir.setSample(0, 0, 1.0f);                              // unit impulse → its reverb tail = the kernel
+    ir.setSample(1, 0, 1.0f);
+
+    if (reverbFlavor.load() != 0)
+    {
+        const double mSec   = (double) M / juce::jmax(1.0, currentSR);
+        const float  decayOv = juce::jlimit(0.30f, 0.95f, 0.30f + (float) mSec * 0.08f);   // fill ~the pre-swell
+        applyReverb(ir, M, /*wetOnly*/ true, mSec, decayOv, 0.30f);
+    }
+
+    for (int c = 0; c < ch; ++c)                           // reverse → preverb (quiet build-up → loud landing)
+        std::reverse(ir.getWritePointer(c), ir.getWritePointer(c) + M);
+
+    // Short fade-in on the very start of the build-up so the kernel head is click-free.
+    const int fin = juce::jmin(M / 4, (int) (currentSR * 0.005));
+    for (int c = 0; c < ch; ++c)
+    { auto* d = ir.getWritePointer(c); for (int i = 0; i < fin; ++i) d[i] *= (float) i / (float) fin; }
+
+    float pk = 0.0f;                                       // normalise so convolution gain is controlled
+    for (int c = 0; c < ch; ++c) pk = juce::jmax(pk, ir.getMagnitude(c, 0, M));
+    if (pk > 1.0e-6f) ir.applyGain(0.5f / pk);
+
+    livePreverb.setIR(std::move(ir), currentSR);
+}
+
+// Message-thread: report the Live Preverb dry-delay to the host so PDC pulls the
+// preverb in front of the original sound. 0 when not in Live mode / IR not ready yet.
+void BacktraceProcessor::pushLiveLatencyIfChanged()
+{
+    const int target = (liveMode.load() && livePreverb.isReady()) ? livePreverb.getLatencySamples() : 0;
+    if (target != liveLatencyApplied.load())
+    {
+        liveLatencyApplied.store(target);
+        setLatencySamples(target);
+        updateHostDisplay();
+    }
 }
 
 // Routing-aware FX topology for the swell bloom (wet-only, decay-filled). This is

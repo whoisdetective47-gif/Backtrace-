@@ -443,6 +443,68 @@ int main()
               "waited=" + juce::String(waited) + "ms len=" + juce::String(proc.getSwellRenderLen()));
     }
 
+    // ---- 10. LIVE PREVERB (Mode 2): real-time reverse-reverb that LEADS INTO the sound --
+    std::printf("10. Live Preverb (real-time reverse reverb):\n");
+    {
+        setReverb(proc, 3);                            // Ghost Shimmer (default reverb)
+        proc.setDelayFlavor(0);
+        proc.setSwellLenBars(0.25f);                   // short pre-swell → fast test
+        proc.setLiveWet(1.0f); proc.setLiveDry(0.0f);  // dry muted → measure the pure preverb
+        proc.setLiveMode(true);
+        proc.prepareToPlay(SR, 512);
+        proc.rebuildLiveIR();                          // synchronous kernel build on this thread
+        const int lat = proc.getLatencySamples();
+
+        // The convolution loads the kernel on a background thread and swaps it into the
+        // active path on a subsequent process() call — give it real settle time + a few
+        // priming blocks so the offline test sees the loaded kernel (deterministic in a DAW).
+        juce::Thread::sleep(300);
+        juce::AudioBuffer<float> warm(2, 512);
+        for (int k = 0; k < 40; ++k)
+        { warm.clear(); juce::AudioBuffer<float> ws(warm.getArrayOfWritePointers(), 2, 512); proc.liveProcessBlock(ws); }
+
+        const int total = juce::jmax(4, lat) * 5 / 2;
+        juce::AudioBuffer<float> out(2, total); out.clear();
+        const int IMP = (int) (SR * 0.02);             // impulse 20 ms into the live stream
+        juce::AudioBuffer<float> blk(2, 512);
+        int pos = 0; bool finite = true; float peak = 0.0f; int peakIdx = 0;
+        while (pos < total)
+        {
+            const int n = juce::jmin(512, total - pos);
+            blk.clear();
+            for (int i = 0; i < n; ++i)
+                if (pos + i == IMP) { blk.setSample(0, i, 1.0f); blk.setSample(1, i, 1.0f); }
+            juce::AudioBuffer<float> sub(blk.getArrayOfWritePointers(), 2, n);
+            proc.liveProcessBlock(sub);
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < n; ++i)
+            {
+                const float v = sub.getSample(c, i);
+                if (! std::isfinite(v)) finite = false;
+                const float a = std::abs(v);
+                if (a > peak && c == 0) { peak = a; peakIdx = pos + i; }
+                out.setSample(c, pos + i, v);
+            }
+            pos += n;
+        }
+
+        check("live preverb kernel loaded", proc.liveConvLoaded(),
+              "latency=" + juce::String(lat) + " (" + juce::String(1000.0 * lat / SR, 0) + " ms)");
+        check("live output finite + bounded (no runaway)", finite && peak <= 1.01f && peak > 0.01f,
+              "peak=" + juce::String(peak, 4) + " @" + juce::String(peakIdx));
+
+        // The swell peak appears AFTER the impulse (→ after host PDC it sits in front of the
+        // original sound), and the energy RISES into that peak (a lead-in, not a dead burst).
+        const int w = juce::jlimit(1, juce::jmax(1, peakIdx / 3), lat / 4);
+        const double early = rms(out, peakIdx - 3 * w, peakIdx - 2 * w);   // far build-up
+        const double late  = rms(out, peakIdx - w,     peakIdx);           // just before the peak
+        check("preverb swell follows the trigger (leads source after PDC)", peakIdx > IMP + lat / 4,
+              "peak@" + juce::String(peakIdx) + " IMP=" + juce::String(IMP));
+        check("preverb RISES into its peak (leads in, not a burst)", late > early * 1.5 && late > 0.002,
+              "early=" + juce::String(early, 5) + " late=" + juce::String(late, 5));
+
+        proc.setLiveMode(false);                       // restore Capture mode default
+    }
+
     std::printf("\nRESULT: %d passed, %d failed -> %s\n", g_pass, g_fail,
                 g_fail == 0 ? "ALL RENDER CHECKS PASS" : "FAILURES ABOVE");
     tmp.deleteRecursively();

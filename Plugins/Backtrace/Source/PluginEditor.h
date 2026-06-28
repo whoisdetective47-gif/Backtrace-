@@ -101,6 +101,13 @@ private:
     void pushDelayParams();
     void applyDelayLayout(int flavor, bool setDefaults = true);   // relabel/range/show knobs
 
+    // Live Preverb (Mode 2) — real-time DAW-synced reverse reverb
+    juce::ToggleButton liveModeToggle { "LIVE PREVERB" };
+    juce::Slider       liveWetKnob;                 // Wet Amount (horizontal)
+    juce::Label        liveWetLabel { {}, "Wet" };
+    juce::Label        liveStatusLabel;             // mode + reported latency
+    int lastLiveLatency = -1;
+
     // reverb (Phase 9)
     juce::Label       reverbCaption { {}, "REVERB SPACE" };
     juce::ComboBox    reverbFlavorBox;                       // Off / Velvet Hall

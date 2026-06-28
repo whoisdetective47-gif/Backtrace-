@@ -3,9 +3,14 @@
 JUCE 8 / C++ audio plugins. This repo is a small monorepo: the active project is
 **Backtrace**, with the sibling **Dust 12.47** and shared DSP alongside it.
 
-> **Backtrace** is a capture-based **reverse-FX swell workstation**: drop in a word /
-> hit / phrase, generate an FX tail (reverb/delay), reverse it, and place the rising
-> "swell" before the sound — the classic manual Cubase reverse-reverb move, as a tool.
+> **Backtrace** is a DAW-synced **preverb & transition designer** with two modes:
+> - **Live Preverb (Mode 2)** — insert on any track; while the DAW plays it generates a
+>   real-time reverse-reverb swell that leads INTO the incoming audio. Uses Swell Length as
+>   the Pre-Swell Length and reports that as latency (a mix effect, not zero-latency).
+>   Toggle **LIVE PREVERB** at the top of the FX column. *(Phase-1 prototype.)*
+> - **Capture / Print (Mode 1)** — drop in a word / hit / phrase, generate an FX tail
+>   (reverb/delay), reverse it, shape it, and print/export/drag the result. The precision
+>   mode — the classic manual Cubase reverse-reverb move, as a designed tool.
 
 ---
 

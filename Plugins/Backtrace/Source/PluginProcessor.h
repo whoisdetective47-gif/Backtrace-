@@ -19,6 +19,7 @@
 #include "DSP/SpringVerb.h"
 #include "DSP/TimeStretch.h"
 #include "DSP/StereoWidener.h"   // shared Common/DSP — Dust 12.47 mono-safe widener
+#include "DSP/LivePreverb.h"     // real-time DAW-synced reverse-reverb (Live Preverb mode)
 #include "UI/FadeCurve.h"
 
 // =============================================================================
@@ -258,6 +259,21 @@ public:
     // Ringout extends the buffer PAST this; the landing itself never moves.
     int  getSwellLanding() const { return swellLandingSamp.load(); }
 
+    // ---- Live Preverb (Mode 2 — real-time DAW-synced reverse reverb) ----
+    void  setLiveMode(bool on)  { liveMode.store(on); requestLiveIR(); }
+    bool  getLiveMode() const   { return liveMode.load(); }
+    void  setLiveWet(float v)   { liveWet.store(juce::jlimit(0.0f, 1.5f, v)); }
+    float getLiveWet() const    { return liveWet.load(); }
+    void  setLiveDry(float v)   { liveDry.store(juce::jlimit(0.0f, 1.0f, v)); }
+    float getLiveDry() const    { return liveDry.load(); }
+    void  requestLiveIR()       { liveIRRequested.store(true); if (renderThread) renderThread->notify(); }
+    void  rebuildLiveIR();                  // worker: render reverb tail of an impulse → reverse → load
+    int   preverbLengthSamples() const;     // pre-swell length (samples), DAW-tempo-locked
+    void  pushLiveLatencyIfChanged();       // message thread: setLatencySamples + updateHostDisplay
+    bool  liveReady() const     { return livePreverb.isReady(); }
+    bool  liveConvLoaded() const { return livePreverb.loadedIRSize() > 0; }   // convolution kernel finished loading
+    void  liveProcessBlock(juce::AudioBuffer<float>& b) { livePreverb.process(b, liveWet.load(), liveDry.load()); }
+
     // ---- Printed-swell editor stage (post-render trim / fades / filter) ----
     // The render (stage 1) fills swellBuffer; trim+fades+filter (stage 2) shape it
     // identically for audition / print / export / drag.
@@ -333,7 +349,8 @@ public:
     // Final-edit change: preset modified, but the printed swell stays valid (live).
     void markDirty()                      { if (! suppressDirty) dirty.store(true); }
     // Tail-generator change: the printed swell must be re-rendered (press Reverse Swell).
-    void markTailDirty()                  { if (! suppressDirty) dirty.store(true); swellStale.store(true); }
+    void markTailDirty()                  { if (! suppressDirty) dirty.store(true); swellStale.store(true);
+                                            if (liveMode.load()) requestLiveIR(); }   // keep the live preverb kernel current
     bool isSwellStale() const             { return swellStale.load() && swellValid.load(); }   // print exists but out of date
 
     void loadPreset(int i);
@@ -486,6 +503,14 @@ private:
     PlateVerb          plateVerb;
     SpringVerb         springVerb;
 
+    // ---- Live Preverb (real-time reverse reverb) ----
+    LivePreverb        livePreverb;
+    std::atomic<bool>  liveMode { false };       // Mode 2 = Live Preverb (else Capture/Print)
+    std::atomic<float> liveWet { 0.6f };         // Wet Amount
+    std::atomic<float> liveDry { 1.0f };         // Dry Amount (0 = Dry Mute)
+    std::atomic<bool>  liveIRRequested { false }; // worker should rebuild the preverb IR
+    std::atomic<int>   liveLatencyApplied { -1 }; // last latency pushed to the host
+
     std::vector<PresetEntry> presets;
     int  currentPreset = 0;
     std::atomic<bool> dirty { false };
@@ -508,10 +533,13 @@ private:
             {
                 wait(-1);                                  // sleep until requestRender notifies
                 if (threadShouldExit()) break;
+                bool didRender = false;
                 while (owner.renderRequested.exchange(false))  // coalesce queued requests (latest params win)
-                    owner.regenerateSwell();
+                {   owner.regenerateSwell(); didRender = true; }
+                if (owner.liveIRRequested.exchange(false))     // Live Preverb kernel rebuild (same thread = no reverb-object race)
+                    owner.rebuildLiveIR();
                 owner.rendering.store(false);
-                owner.renderDone.store(true);
+                if (didRender) owner.renderDone.store(true);   // IR-only passes must NOT signal a swell render
             }
         }
     };
