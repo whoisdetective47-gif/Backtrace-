@@ -145,10 +145,10 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
 
     struct FK { juce::Slider* k; juce::Label* l; double lo, hi, def; std::function<void(float)> set; };
     const std::vector<FK> fks {
-        { &hpfKnob,    &hpfLabel,    20.0,  2000.0,  20.0,    [this](float v){ proc.setHpfStart(v); } },
-        { &hpfEndKnob, &hpfEndLabel, 20.0,  2000.0,  20.0,    [this](float v){ proc.setHpfEnd(v);   } },
-        { &lpfKnob,    &lpfLabel,    500.0, 20000.0, 20000.0, [this](float v){ proc.setLpfStart(v); } },
-        { &lpfEndKnob, &lpfEndLabel, 500.0, 20000.0, 20000.0, [this](float v){ proc.setLpfEnd(v);   } },
+        { &hpfKnob,    &hpfLabel,    20.0,  8000.0,  20.0,    [this](float v){ proc.setHpfStart(v); } },  // 20 = off; up to 8k kills rumble
+        { &hpfEndKnob, &hpfEndLabel, 20.0,  8000.0,  20.0,    [this](float v){ proc.setHpfEnd(v);   } },
+        { &lpfKnob,    &lpfLabel,    300.0, 20000.0, 20000.0, [this](float v){ proc.setLpfStart(v); } },  // 20k = open; down to 300 = very dark
+        { &lpfEndKnob, &lpfEndLabel, 300.0, 20000.0, 20000.0, [this](float v){ proc.setLpfEnd(v);   } },
     };
     for (auto& fk : fks)
     {
@@ -264,12 +264,22 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     };
     addAndMakeVisible(playSourceButton);
 
-    // --- Audition Swell: replays the current printed swell (with edits) ---
+    // --- Play Swell: replays the CURRENT rendered swell (no rebuild). If a tail-generator
+    // setting changed since the render, it honestly says it is playing the previous swell. ---
     reverseButton.onClick = [this]
     {
-        if (proc.getAuditionWhat() == 2) proc.stopReverseAudition();
-        else { proc.setSwellMode(true); proc.startReverseAudition(false); }   // ensure (lazy) + play edited
+        if (proc.getAuditionWhat() == 2) { proc.stopReverseAudition(); return; }
+        proc.setSwellMode(true);
+        proc.startReverseAudition(false);   // replay edited swell, no re-render
+        if (! proc.hasSwell())
+            statusLabel.setText("Nothing to play - press Create Swell", juce::dontSendNotification);
+        else if (proc.isSwellStale())
+            statusLabel.setText("Playing previous swell - press Create Swell to update", juce::dontSendNotification);
+        else
+            statusLabel.setText("Playing swell", juce::dontSendNotification);
     };
+    reverseButton.setTooltip("Replay the current rendered swell exactly as it will print/export/drag. "
+                             "If a tail setting changed, press Create Swell to rebuild first.");
     addAndMakeVisible(reverseButton);
 
     // --- Audition Tail: hear the FORWARD wet FX tail BEFORE it is reversed ---
@@ -311,8 +321,8 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
             default: barsVal = 2.0f; break;
         }
         proc.setSwellLenBars(barsVal);
-        if (proc.hasSwell()) proc.regenerateSwell();   // immediately time-fit the printed swell to the new length
-        refreshSwellCanvas();
+        if (proc.hasSwell()) proc.requestRender(false);   // background re-render to the new length
+        else refreshSwellCanvas();
     };
     addAndMakeVisible(swellBox);
 
@@ -322,20 +332,24 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     keepPitchToggle.onClick = [this]
     {
         proc.setKeepPitch(keepPitchToggle.getToggleState());
-        if (proc.hasSwell()) proc.regenerateSwell();
-        refreshSwellCanvas();
+        if (proc.hasSwell()) proc.requestRender(false);
+        else refreshSwellCanvas();
     };
     addAndMakeVisible(keepPitchToggle);
+    // --- Create Swell: rebuild the swell from the source with the CURRENT settings, then
+    // auto-play the new result. This is the only action that re-renders the tail. ---
     swellButton.onClick = [this]
     {
+        if (proc.isRendering()) return;
+        if (proc.getCaptureLength() <= 0)
+        { statusLabel.setText("Load a source first (drag audio in)", juce::dontSendNotification); return; }
         proc.stopReverseAudition();
         proc.setSwellMode(true);
-        proc.startReverseAudition(true);   // force regenerate + play
-        if (proc.hasSwell())
-            statusLabel.setText("Swell ready - Audition or drag to Cubase", juce::dontSendNotification);
-        else
-            statusLabel.setText("Load a source first (drag audio in)", juce::dontSendNotification);
+        proc.requestRender(true);          // background render → auto-play when it completes
+        statusLabel.setText("Rendering swell...", juce::dontSendNotification);
     };
+    swellButton.setTooltip("Render the reverse swell from the current source + settings and play it. "
+                           "Do this after changing any tail setting (delay, reverb, tail type, length, pitch).");
     addAndMakeVisible(swellButton);
 
     landToggle.setColour(juce::ToggleButton::textColourId, juce::Colours::white.withAlpha(0.8f));
@@ -652,34 +666,43 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     addAndMakeVisible(slotClearBtn);
     addAndMakeVisible(slotRenameBtn);
 
-    // --- GLOBAL SWELL MACROS — 6 final-swell shaping controls ---
-    const juce::StringArray macroNames { "Swell", "Tail", "Ghost", "Damage", "Reveal", "Width" };
+    // --- GLOBAL SWELL MACROS — final-swell shaping + output controls ---
+    // Tail/Ghost/Ringout re-render the tail (mark stale); Swell/Damage/Reveal/Width/Level are live.
+    const juce::StringArray macroNames { "Pull", "Tail", "Ghost", "Damage", "Reveal", "Width", "Level", "Ringout" };
     const juce::StringArray macroTips {
-        "Global reverse-rise intensity. 100% = full Backtrace pull (quiet start, dramatic build into the landing point). Lower = gentler.",
-        "Overall delay/reverb trail length and intensity.",
-        "Adds blur, diffusion, modulation, shimmer influence and haunted atmosphere (not just more reverb).",
+        "PULL - the reverse-swell curve. 50% = natural reverse-reverb rise. Below = more even. Above = dramatic late pull/suck into the landing. The start stays quiet-but-present; the bloom lands at the hit.",
+        "Overall delay/reverb trail length and intensity. (Re-render: press Create Swell.)",
+        "Adds blur, diffusion, modulation, shimmer influence and haunted atmosphere (not just more reverb). (Re-render: press Create Swell.)",
         "Adds Dust Vault-style age, grit, saturation and degradation. Safely bounded.",
-        "Opens or hides the final swell with global filter tone (low = dark/hidden, high = open/bright).",
-        "Global mono-safe stereo width for the final printed swell (Dust 12.47-style widening). 0 = mono, 50 = natural, 70 = wide & safe, 100 = max wide." };
-    for (int i = 0; i < 6; ++i)
+        "Opens or hides the final swell with the Harrison-style filter (low = dark/hidden, high = open/bright). On top of the FINAL FILTER; leave at 100% to let your HPF/LPF endpoints win.",
+        "Global mono-safe stereo width for the final printed swell (Dust 12.47-style widening). 0 = mono, 50 = natural, 70 = wide & safe, 100 = max wide.",
+        "Swell Level — output trim on the finished swell (-24 to +6 dB). Tames hot sources like snares. Applies to Play / Print / Export / Drag.",
+        "Tail Ringout — natural FX decay printed AFTER the landing so the swell doesn't dead-stop. Off = release fade only. (Re-render: press Create Swell.)" };
+    for (int i = 0; i < macroNames.size(); ++i)
     {
         auto* s = macroKnobs.add(new juce::Slider());
         s->setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
         s->setRange(0.0, 1.0, 0.01);
         s->setTextBoxStyle(juce::Slider::TextBoxBelow, false, 64, 18);
         s->setLookAndFeel(&knobLNF);
-        s->setColour(juce::Slider::thumbColourId, juce::Colour(0xffd9a441));
+        s->setColour(juce::Slider::thumbColourId, juce::Colour(i >= 6 ? 0xff7ad1ff : 0xffd9a441));   // output controls = blue
         s->setTooltip(macroTips[i]);
         s->onValueChange = [this, i] { pushMacro(i); };
         addAndMakeVisible(s);
 
         auto* lbl = macroLabels.add(new juce::Label({}, macroNames[i]));
-        lbl->setColour(juce::Label::textColourId, juce::Colour(0xffe0b85a));
+        lbl->setColour(juce::Label::textColourId, juce::Colour(i >= 6 ? 0xff8fc7ee : 0xffe0b85a));
         lbl->setJustificationType(juce::Justification::centred);
         lbl->setFont(juce::Font(i == 0 ? 14.5f : 13.5f, juce::Font::bold));   // Swell is the headline macro
         lbl->setTooltip(macroTips[i]);
         addAndMakeVisible(lbl);
     }
+    // Readable units: Level shows dB, Ringout shows % / Off.
+    macroKnobs[6]->textFromValueFunction = [](double v) { return juce::String(BacktraceProcessor::levelToDb((float) v), 1) + " dB"; };
+    macroKnobs[6]->valueFromTextFunction = [](const juce::String& t) { return (double) juce::jlimit(0.0f, 1.0f, (t.getFloatValue() + 24.0f) / 30.0f); };
+    macroKnobs[6]->updateText();
+    macroKnobs[7]->textFromValueFunction = [](double v) { return v <= 0.001 ? juce::String("Off") : juce::String(juce::roundToInt(v * 100.0)) + "%"; };
+    macroKnobs[7]->updateText();
 
     setSize(1000, 752);
     rebuildPresetMenu();
@@ -926,9 +949,9 @@ void BacktraceEditor::rebuildSlotList()
 void BacktraceEditor::updateWorkflowHints()
 {
     if (proc.getCaptureLength() <= 0)
-        swellCanvas.setEmptyHint("Drag a source into the lane above,\nthen press Reverse Swell.");
+        swellCanvas.setEmptyHint("Drag a source into the lane above,\nthen press Create Swell.");
     else
-        swellCanvas.setEmptyHint("Source loaded.\nChoose Swell Length and press Reverse Swell.");
+        swellCanvas.setEmptyHint("Source loaded.\nChoose Swell Length and press Create Swell.");
 }
 
 int BacktraceEditor::delaySlotIndex(const juce::String& name) const
@@ -956,9 +979,11 @@ void BacktraceEditor::pushMacro(int idx)
         case 3: proc.setMacroDamage(v); break;
         case 4: proc.setMacroReveal(v); break;
         case 5: proc.setMacroWidth(v);  break;
+        case 6: proc.setMacroLevel(v);  break;   // Swell Level (live output trim)
+        case 7: proc.setMacroRingout(v); break;  // Tail Ringout (tail-gen → marks stale)
         default: break;
     }
-    refreshSwellCanvas();   // Swell/Reveal/Damage/Width reshape the visible swell live
+    refreshSwellCanvas();   // Swell/Reveal/Damage/Width/Level reshape the visible swell live
 }
 
 void BacktraceEditor::syncMacros()
@@ -969,6 +994,8 @@ void BacktraceEditor::syncMacros()
     macroKnobs[3]->setValue(proc.getMacroDamage(), juce::dontSendNotification);
     macroKnobs[4]->setValue(proc.getMacroReveal(), juce::dontSendNotification);
     macroKnobs[5]->setValue(proc.getMacroWidth(),  juce::dontSendNotification);
+    macroKnobs[6]->setValue(proc.getMacroLevel(),  juce::dontSendNotification);
+    macroKnobs[7]->setValue(proc.getMacroRingout(),juce::dontSendNotification);
 }
 
 void BacktraceEditor::updateRoutingFlow()
@@ -1197,8 +1224,29 @@ void BacktraceEditor::importFiles(const juce::StringArray& files, int slot)
     else statusLabel.setText("Could not import audio file", juce::dontSendNotification);
 }
 
+// Disable the controls that touch the render path while a background render runs, and
+// show "Rendering…". Play Source stays enabled (read-only on the source). Kept brief —
+// renders are sub-second; this just prevents a concurrent mutate of shared render state.
+void BacktraceEditor::setRenderingUI(bool busy)
+{
+    const bool en = ! busy;
+    for (auto* b : { &swellButton, &reverseButton, &auditionTailButton, &finalizeButton,
+                     &exportButton, &importButton, &sourceTabBtn, &printTabBtn,
+                     &presetPrev, &presetNext, &presetSave, &presetReset })
+        b->setEnabled(en);
+    swellBox.setEnabled(en); keepPitchToggle.setEnabled(en); presetBox.setEnabled(en);
+    pitchSlider.setEnabled(en); octUpButton.setEnabled(en); octDownButton.setEnabled(en);
+    routingBox.setEnabled(en); delayFlavorBox.setEnabled(en); reverbFlavorBox.setEnabled(en);
+    for (auto* s : macroKnobs)  s->setEnabled(en);
+    for (auto* s : delayKnobs)  s->setEnabled(en);
+    for (auto* s : reverbKnobs) s->setEnabled(en);
+    for (auto* b : slotButtons) b->setEnabled(en);
+    if (busy) statusLabel.setText("Rendering swell...", juce::dontSendNotification);
+}
+
 void BacktraceEditor::refreshSwellCanvas()
 {
+    if (proc.isRendering()) return;   // the worker owns swellBuffer mid-render — don't read it
     // Ruler bars derived from the ACTUAL buffer duration + tempo, so the timeline,
     // the audio, and the swell-length selector always agree.
     const int    beatsPerBar = proc.getHostTsNum() > 0 ? proc.getHostTsNum() : 4;
@@ -1211,9 +1259,12 @@ void BacktraceEditor::refreshSwellCanvas()
     swellCanvas.setMusical(bars, beatsPerBar);
 
     if (proc.hasSwell())
+    {
         swellCanvas.setSwell(&proc.getSwellBuffer(), proc.getSwellRenderLen(), proc.getSwellRenderSR(),
                              proc.getSwellTrimIn(), proc.getSwellTrimOut(),
                              proc.getFadeIn(), proc.getFadeOut());
+        swellCanvas.setLanding(proc.getSwellLanding());   // marker at the rise end; ringout follows
+    }
     else
         swellCanvas.clearSwell();
     updateSwellSelLabel();
@@ -1399,7 +1450,7 @@ void BacktraceEditor::timerCallback()
 
     const int aw = proc.getAuditionWhat();
     playSourceButton.setButtonText(aw == 1 ? "Stop" : "Play Source");
-    reverseButton.setButtonText   (aw == 2 ? "Stop" : "Audition Swell");
+    reverseButton.setButtonText   (aw == 2 ? "Stop" : "Play Swell");
     auditionTailButton.setButtonText(aw == 3 ? "Stop" : "Audition Tail");
 
     // audition playhead — source lane for Play Source, printed lane for Audition Swell
@@ -1443,12 +1494,12 @@ void BacktraceEditor::timerCallback()
     if (stale != lastStaleState)
     {
         lastStaleState = stale;
-        printedCaption.setText(stale ? "2  PRINTED SWELL  -  OUT OF DATE: press Reverse Swell"
+        printedCaption.setText(stale ? "2  PRINTED SWELL  -  SETTINGS CHANGED: press Create Swell to update"
                                      : "2  PRINTED SWELL   (3  DRAG TO DAW)", juce::dontSendNotification);
         printedCaption.setColour(juce::Label::textColourId, stale ? juce::Colour(0xffe6892e) : juce::Colour(0xffc8a24a));
         swellButton.setColour(juce::TextButton::buttonColourId, stale ? juce::Colour(0xffb5651d) : juce::Colour(0xff34383d));
         if (stale && proc.hasSwell())
-            statusLabel.setText("Print out of date - press Reverse Swell to update", juce::dontSendNotification);
+            statusLabel.setText("Settings changed - press Create Swell to update", juce::dontSendNotification);
         repaint();
     }
 
@@ -1461,7 +1512,21 @@ void BacktraceEditor::timerCallback()
         updateSwellSelLabel();
     }
     if (proc.consumeSlotsChanged()) rebuildSlotList();
-    if (proc.consumeSwellChanged()) refreshSwellCanvas();
+
+    // Background render: toggle the busy UI on transition, and on completion swap in the
+    // freshly rendered swell (+ auto-play if Create Swell asked for it).
+    const bool busy = proc.isRendering();
+    if (busy != wasRendering) { wasRendering = busy; setRenderingUI(busy); }
+    if (proc.consumeRenderDone())
+    {
+        refreshSwellCanvas();
+        updateSwellSelLabel();
+        if (proc.consumePendingAutoPlay()) { proc.setSwellMode(true); proc.startReverseAudition(false); }
+        statusLabel.setText(proc.hasSwell()
+            ? "Swell created - playing. Print / Export / Drag to use it."
+            : "Load a source first (drag audio in)", juce::dontSendNotification);
+    }
+    if (! busy && proc.consumeSwellChanged()) refreshSwellCanvas();
     updatePresetStatus();
 
     if (proc.captureJustFinished())

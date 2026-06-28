@@ -91,7 +91,9 @@ public:
     const juce::String getName() const override { return "Detective 47s Backtrace"; }
     bool   acceptsMidi()  const override { return false; }
     bool   producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
+    // Advertise the FX decay so a host gives the audition tail time to ring out.
+    double getTailLengthSeconds() const override
+    { return juce::jlimit(0.0, 12.0, (double) (tailLen() + reverbTailLen()) / juce::jmax(1.0, currentSR)); }
 
     int  getNumPrograms() override { return 1; }
     int  getCurrentProgram() override { return 0; }
@@ -170,7 +172,7 @@ public:
     int    getPlannedSamples() const { return syncCapture.getPlannedSamples(); }
 
     // ---- Trim locators (Phase 2) — feed reverse/print in later phases ----
-    void setTrim(int inSample, int outSample) { trimIn.store(inSample); trimOut.store(outSample); tailStartSamp.store(-1); swellStale.store(true); }
+    void setTrim(int inSample, int outSample) { trimIn.store(inSample); trimOut.store(outSample); tailStartSamp.store(-1); markTailDirty(); }
     int  getTrimIn()  const { return trimIn.load(); }
     int  getTrimOut() const { return trimOut.load(); }
 
@@ -231,17 +233,44 @@ public:
     // ---- Reverse Swell (locator-capture workflow) ----
     void setSwellBars(int b) { setSwellLenBars((float) b); }
     int  getSwellBars() const { return (int) std::lround(swellLenBars.load()); }
-    void setSwellLenBars(float b) { if (b != swellLenBars.load()) swellStale.store(true); swellLenBars.store(b); }
+    void setSwellLenBars(float b) { if (b != swellLenBars.load()) markTailDirty(); swellLenBars.store(b); }
     float getSwellLenBars() const { return swellLenBars.load(); }
-    void setSwellMode(bool m) { if (m != swellMode.load()) swellStale.store(true); swellMode.store(m); }
+    void setSwellMode(bool m) { if (m != swellMode.load()) markTailDirty(); swellMode.store(m); }
     bool getSwellMode() const { return swellMode.load(); }
-    void setKeepPitch(bool b) { if (b != keepPitch.load()) swellStale.store(true); keepPitch.store(b); }
+    void setKeepPitch(bool b) { if (b != keepPitch.load()) markTailDirty(); keepPitch.store(b); }
     bool getKeepPitch() const { return keepPitch.load(); }
+
+    // ---- Tail Ringout (aftertail) — audio that continues AFTER the landing so the
+    // swell decays naturally instead of dead-stopping. Tail-generator param (changes
+    // the rendered buffer length → re-render). 0 = off (a release fade still prevents
+    // a hard cut); up to ~3 s of the natural forward FX tail past the landing. ----
+    void  setMacroRingout(float v) { macroRingout.store(juce::jlimit(0.0f,1.0f,v)); markTailDirty(); }
+    float getMacroRingout() const  { return macroRingout.load(); }
+
+    // ---- Swell Level — final output trim on the rendered swell (−24..+6 dB). Applies
+    // to Play Swell / Print / Export / Drag / Print slots (NOT raw source playback).
+    // Live final-edit (no re-render); saved with session + preset state. ----
+    void  setMacroLevel(float v) { macroLevel.store(juce::jlimit(0.0f,1.0f,v)); swellChangedFlag.store(true); markDirty(); }
+    float getMacroLevel() const  { return macroLevel.load(); }
+    static float levelToDb(float v) { return juce::jmap(juce::jlimit(0.0f,1.0f,v), -24.0f, 6.0f); }  // 0.8 ≈ 0 dB
+
+    // Landing sample — where the reverse lead-in resolves (end of the rise). The
+    // Ringout extends the buffer PAST this; the landing itself never moves.
+    int  getSwellLanding() const { return swellLandingSamp.load(); }
 
     // ---- Printed-swell editor stage (post-render trim / fades / filter) ----
     // The render (stage 1) fills swellBuffer; trim+fades+filter (stage 2) shape it
     // identically for audition / print / export / drag.
     void regenerateSwell();                       // force a fresh stage-1 render + reset edits
+
+    // ---- Background render — keeps the UI responsive (Create Swell can take 100s of ms
+    // for long swells). requestRender() kicks a worker thread that runs regenerateSwell()
+    // off the message thread; the editor polls consumeRenderDone() and swaps in the result.
+    // While isRendering() is true the editor disables the controls that touch the render. ----
+    void requestRender(bool autoPlay);
+    bool isRendering() const          { return rendering.load(); }
+    bool consumeRenderDone()          { return renderDone.exchange(false); }
+    bool consumePendingAutoPlay()     { return pendingAutoPlay.exchange(false); }
     // Build the print only if none exists yet. A STALE print (tail-gen param changed)
     // is NOT auto-rebuilt — the user presses Reverse Swell — so Audition/Print/Export
     // all use the same cached print and the UI shows an "out of date" warning.
@@ -318,7 +347,7 @@ public:
     void startReverseAudition(bool forceRegen = false);  // (re)build printed swell → play
     void startTailAudition();        // play the FORWARD wet tail (pre-reverse) so the user vets the FX
     void startSourceAudition();      // play the raw selected source region (active slot)
-    void stopReverseAudition()       { playPlaying.store(false); }
+    void stopReverseAudition()       { playStopping.store(true); }   // graceful: audio thread ramps out
     bool isReverseAuditioning() const { return playPlaying.load(); }
     int  getAuditionWhat()     const { return playPlaying.load() ? auditionWhat.load() : 0; }  // 0 none, 1 source, 2 swell
 
@@ -368,6 +397,7 @@ private:
     int  tailLen() const;       // extra samples for the delay ring-out
     int  reverbTailLen() const; // extra samples for the reverb decay
     int  extraTail() const;     // combined FX tail, min 2 s, capped 45 s
+    int  swellRingoutSamples() const;  // desired aftertail length from the Ringout macro
     void applyOutputSafety(juce::AudioBuffer<float>& buf, int total);  // global DC block + soft ceiling
 
     CaptureEngine             capture;
@@ -386,6 +416,8 @@ private:
     // Reverse audition playback (message thread builds, audio thread plays).
     juce::AudioBuffer<float> playBuffer;
     std::atomic<bool> playPlaying { false };
+    std::atomic<bool>  playStopping { false };   // user pressed Stop → ramp out (no click)
+    std::atomic<float> playGain { 1.0f };        // release envelope (block-local on audio thread; reset on start)
     std::atomic<int>  playPos { 0 }, playLen { 0 };
     std::atomic<int>  auditionWhat { 0 };   // 0 none, 1 source, 2 swell
     std::atomic<bool> landAtSource { false };
@@ -395,24 +427,29 @@ private:
     std::atomic<bool>  keepPitch { true };   // time-fit preserves source pitch (vs creative pitch-drop)
 
     // Global Swell Macros (Phase 24) — default Swell 100% so a fresh swell is dramatic.
-    std::atomic<float> macroSwell  { 1.0f };   // reverse-rise intensity (THE Backtrace control)
+    std::atomic<float> macroSwell  { 0.5f };   // PULL — reverse-rise curve (0 even · 0.5 natural · 1 dramatic)
     std::atomic<float> macroTail   { 0.35f };  // overall delay/reverb trail length + amount
     std::atomic<float> macroGhost  { 0.0f };   // diffusion / modulation / shimmer / blur
     std::atomic<float> macroDamage { 0.0f };   // Dust-Vault saturation / age / degradation
     std::atomic<float> macroReveal { 1.0f };   // final filter openness (1 = open/bright, 0 = dark)
     std::atomic<float> macroWidth  { 0.7f };   // mono-safe final stereo width
+    std::atomic<float> macroRingout{ 0.2f };   // aftertail past the landing (0 = off + release fade)
+    std::atomic<float> macroLevel  { 0.8f };   // Swell Level output trim (0.8 ≈ 0 dB, range −24..+6)
 
     StereoWidener swellWidener;   // Width macro — Dust 12.47 mono-safe final widener
 
     // Printed-swell editor stage (stage-1 render result + stage-2 edit params).
     juce::AudioBuffer<float> swellBuffer;       // raw bloom × Swell-macro envelope (what's drawn/edited)
     juce::AudioBuffer<float> swellRawBuffer;    // raw bloom BEFORE the Swell envelope (for cheap reshaping)
+    juce::AudioBuffer<float> renderWork;        // persistent render scratch (reused, never per-render alloc)
+    juce::AudioBuffer<float> importTemp;        // persistent import/resample scratch (reused)
     int    swellRenderLen = 0;
     double swellRenderSR  = 44100.0;
     std::atomic<bool> swellValid { false };
     std::atomic<bool> swellStale { true };
     std::atomic<bool> swellChangedFlag { false };
     std::atomic<int>  tailStartSamp { -1 };   // Source End / Tail Start (samples from trim start; -1 = auto)
+    std::atomic<int>  swellLandingSamp { 0 }; // landing point in the rendered swell (= rise length; ringout follows)
     std::atomic<int>  swellTrimIn { 0 }, swellTrimOut { 0 };
     std::atomic<int>  fadeInLen { 0 }, fadeOutLen { 0 };
     std::atomic<int>  fadeInCurve { FadeLinear }, fadeOutCurve { FadeLinear };
@@ -454,6 +491,30 @@ private:
 
     juce::SmoothedValue<float> sOutput;
     double currentSR = 44100.0;
+
+    // Background render worker. The nested Thread can touch the owner's private state.
+    struct RenderThread : juce::Thread
+    {
+        BacktraceProcessor& owner;
+        explicit RenderThread(BacktraceProcessor& o) : juce::Thread("BacktraceRender"), owner(o) {}
+        void run() override
+        {
+            while (! threadShouldExit())
+            {
+                wait(-1);                                  // sleep until requestRender notifies
+                if (threadShouldExit()) break;
+                while (owner.renderRequested.exchange(false))  // coalesce queued requests (latest params win)
+                    owner.regenerateSwell();
+                owner.rendering.store(false);
+                owner.renderDone.store(true);
+            }
+        }
+    };
+    std::unique_ptr<RenderThread> renderThread;
+    std::atomic<bool> rendering       { false };
+    std::atomic<bool> renderRequested { false };
+    std::atomic<bool> renderDone      { false };
+    std::atomic<bool> pendingAutoPlay { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BacktraceProcessor)
 };

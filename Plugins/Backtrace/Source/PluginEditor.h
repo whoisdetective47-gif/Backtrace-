@@ -57,7 +57,7 @@ private:
     juce::TextButton  armButton     { "Capture" };
     juce::ToggleButton lockToggle   { "Locator Lock" };
     juce::TextButton  finalizeButton { "Print" };
-    juce::TextButton  reverseButton { "Audition Swell" };
+    juce::TextButton  reverseButton { "Play Swell" };
     juce::TextButton  playSourceButton { "Play Source" };
     juce::TextButton  revealButton { "Reveal" };
     juce::ToggleButton landToggle   { "Land at Source" };
@@ -66,10 +66,12 @@ private:
     juce::Label       swellCaption  { {}, "Swell" };
     juce::ComboBox    swellBox;
     juce::ToggleButton keepPitchToggle { "Keep Pitch" };
-    juce::TextButton  swellButton   { "Reverse Swell" };
+    juce::TextButton  swellButton   { "Create Swell" };
 
     bool lastStaleState = false;     // tracks the printed-swell "out of date" warning
     bool filterAnimating = false;    // HPF/LPF knobs showing a display-only motion sweep
+    bool wasRendering = false;       // tracks the background-render busy state
+    void setRenderingUI(bool busy);  // disable render-touching controls + show "Rendering…"
 
     // Tail Type (was "routing") — the tail generator that gets reversed
     juce::Label    routingCaption { {}, "TAIL TYPE" };

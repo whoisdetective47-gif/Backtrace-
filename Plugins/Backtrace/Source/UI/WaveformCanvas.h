@@ -46,20 +46,22 @@ public:
 
     void setCapture(const juce::AudioBuffer<float>* buf, int length, double sr)
     {
+        if (buf == nullptr || length <= 0 || buf->getNumSamples() < length) { clearCapture(); return; }
         source     = buf;
         sourceLen  = length;
         sampleRate = sr;
         trimIn     = 0;
         trimOut    = juce::jmax(0, length);
         tailStart  = trimOut;                 // Tail Start defaults to the source end
-        rebuildPeaks();
+        rebuildPeaks();                        // always rebuild on a new source (content may have changed)
         if (onLocatorsChanged) onLocatorsChanged(trimIn, trimOut);
         repaint();
     }
 
     void clearCapture()
     {
-        source = nullptr; sourceLen = 0; trimIn = trimOut = tailStart = 0; peaks.clear(); repaint();
+        source = nullptr; sourceLen = 0; trimIn = trimOut = tailStart = 0;
+        peaks.clear(); valid = false; lastWidth = -1; repaint();
     }
 
     void setPlayhead(int sample) { if (sample != playhead) { playhead = sample; repaint(); } }
@@ -74,7 +76,7 @@ public:
     int getTrimIn()  const { return trimIn; }
     int getTrimOut() const { return trimOut; }
 
-    void resized() override { rebuildPeaks(); }
+    void resized() override { if (getWidth() != lastWidth) rebuildPeaks(); }   // skip redundant rebuilds
 
     void paint(juce::Graphics& g) override
     {
@@ -91,7 +93,7 @@ public:
             g.drawRoundedRectangle(rf.reduced(1.0f), 6.0f, 2.0f);
         }
 
-        if (peaks.empty())
+        if (! valid || peaks.empty())
         {
             g.setColour(juce::Colour(0x18ffffff));
             g.drawHorizontalLine((int) rf.getCentreY(), rf.getX(), rf.getRight());
@@ -225,7 +227,10 @@ private:
     void rebuildPeaks()
     {
         peaks.clear();
-        if (source == nullptr || sourceLen <= 0 || getWidth() <= 0) return;
+        valid = false;
+        lastWidth = getWidth();
+        if (source == nullptr || sourceLen <= 0 || getWidth() <= 0
+            || source->getNumSamples() < sourceLen || source->getNumChannels() <= 0) return;
 
         const int w   = getWidth();
         const int ch  = source->getNumChannels();
@@ -247,6 +252,7 @@ private:
             }
             peaks[(size_t) x] = juce::jmin(1.0f, pk);
         }
+        valid = true;   // peaks reflect a real, in-bounds source buffer
     }
 
     const juce::AudioBuffer<float>* source = nullptr;
@@ -258,6 +264,8 @@ private:
     int tailStart = 0;    // Source End / Tail Start (absolute source sample)
     int dragTarget = 0;   // 0 none, 1 = A, 2 = B, 3 = Tail Start
     int playhead = -1;    // audition playhead sample (-1 = hidden)
+    bool valid = false;   // peaks reflect a real in-bounds buffer (else show the empty hint)
+    int  lastWidth = -1;  // skip rebuildPeaks() on resize when width is unchanged
     bool dropHover = false;
-    juce::String emptyHint { "Drag a word, hit, or phrase here.\nThen choose Swell Length and press Reverse Swell." };
+    juce::String emptyHint { "Drag a word, hit, or phrase here.\nThen choose Swell Length and press Create Swell." };
 };

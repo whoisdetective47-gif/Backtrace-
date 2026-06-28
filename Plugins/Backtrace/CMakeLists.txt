@@ -73,3 +73,23 @@ target_link_libraries(Backtrace PRIVATE
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
 )
+
+# ---------------------------------------------------------------------------
+# End-to-end render measurement test (console) — drives the real processor
+# headless (no GUI) and measures ringout / level / filter / determinism.
+# ---------------------------------------------------------------------------
+juce_add_console_app(BacktraceRenderTest PRODUCT_NAME "BacktraceRenderTest")
+juce_generate_juce_header(BacktraceRenderTest)
+target_sources(BacktraceRenderTest PRIVATE Tests/RenderTest.cpp Source/PluginProcessor.cpp)
+target_include_directories(BacktraceRenderTest PRIVATE Source ../../Common)
+target_compile_definitions(BacktraceRenderTest PRIVATE
+    BACKTRACE_NO_EDITOR=1
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=0
+    JUCE_STANDALONE_APPLICATION=1)
+target_link_libraries(BacktraceRenderTest PRIVATE
+    juce::juce_audio_processors
+    juce::juce_audio_formats
+    juce::juce_audio_basics
+    juce::juce_dsp
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)

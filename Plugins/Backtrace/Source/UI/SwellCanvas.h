@@ -41,6 +41,9 @@ public:
     void clearSwell() { source = nullptr; sourceLen = 0; peaks.clear(); repaint(); }
     void setEmptyHint(const juce::String& h) { emptyHint = h; if (peaks.empty()) repaint(); }
     void setPlayhead(int sample) { if (sample != playhead) { playhead = sample; repaint(); } }
+    // Landing sample = where the reverse rise resolves; the Ringout (if any) follows it.
+    // -1 = fall back to the trim end (legacy / no ringout).
+    void setLanding(int sample) { if (sample != landing) { landing = sample; repaint(); } }
     void setMusical(double barsIn, int beatsPerBarIn)
     { bars = juce::jmax(0.0625, barsIn); beatsPerBar = juce::jmax(1, beatsPerBarIn); repaint(); }
     void setSnap(int div) { snapDiv = div; }
@@ -125,12 +128,17 @@ public:
         drawLocator(g, xa, waveTop, juce::Colour(0xff3ad17a), "A");
         drawLocator(g, xb, waveTop, juce::Colour(0xffe2a44a), "B");
 
-        // Landing Point — the reverse swell resolves (lands into the source word) at the
-        // loud end of the printed swell. Drawn in the Source-End / Tail-Start colour so
-        // the two read as a pair: source ends → tail reverses → swell LANDS here.
+        // Landing Point — where the reverse rise resolves (lands into the source word).
+        // It sits at the END OF THE RISE; any Tail Ringout continues AFTER it (the marker
+        // never moves with ringout). Drawn in the Source-End / Tail-Start colour so the
+        // two read as a pair: source ends → tail reverses → swell LANDS here → rings out.
         {
+            const int   lSamp = (landing >= 0 && landing <= sourceLen) ? landing : trimOut;
+            const float xl    = sampleToX(lSamp);
             const juce::Colour lc(0xffd1593a);
-            juce::Rectangle<float> tab(xb - 64.0f, (float) getHeight() - 14.0f, 62.0f, 13.0f);
+            g.setColour(lc.withAlpha(0.85f));
+            g.fillRect(xl - 0.75f, waveTop, 1.5f, (float) getHeight() - waveTop);   // landing line
+            juce::Rectangle<float> tab(xl - 64.0f, (float) getHeight() - 14.0f, 62.0f, 13.0f);
             if (tab.getX() < 2.0f) tab.setX(2.0f);
             g.setColour(lc);
             g.fillRect(tab);
@@ -362,6 +370,7 @@ private:
     int    snapDiv = 0;                    // 0 Off, 1 1Bar, 2 1/2, 3 1/4, 4 1/8, 5 1/16
     int  dragTarget = 0;                   // 0 none, 1 A, 2 B, 3 fade-in, 4 fade-out
     int  playhead = -1;                    // audition playhead sample (-1 = hidden)
+    int  landing  = -1;                    // landing sample (end of rise; -1 = use trim end)
     bool bodyDrag = false, dragging = false;
-    juce::String emptyHint { "Drag a source into the lane above,\nthen press Reverse Swell." };
+    juce::String emptyHint { "Drag a source into the lane above,\nthen press Create Swell." };
 };

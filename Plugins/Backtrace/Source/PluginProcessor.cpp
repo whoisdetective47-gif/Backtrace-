@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
-#include "PluginEditor.h"
+#ifndef BACKTRACE_NO_EDITOR          // headless render/measurement test links the processor without the GUI
+ #include "PluginEditor.h"
+#endif
 #include "Utilities/FactoryPresets.h"
 
 // Zero-delay-feedback (TPT) state-variable section — unconditionally stable at any
@@ -55,9 +57,30 @@ BacktraceProcessor::BacktraceProcessor()
     buildFactoryPresets();
     reloadUserPresets();
     loadPreset(0);   // open on the first factory preset
+    renderThread = std::make_unique<RenderThread>(*this);
+    renderThread->startThread();
 }
 
-BacktraceProcessor::~BacktraceProcessor() {}
+BacktraceProcessor::~BacktraceProcessor()
+{
+    if (renderThread)   // stop the worker BEFORE members it touches are destroyed
+    {
+        renderThread->signalThreadShouldExit();
+        renderThread->notify();
+        renderThread->stopThread(3000);
+        renderThread.reset();
+    }
+}
+
+// Kick a background render (Create Swell / length / keep-pitch). The worker runs
+// regenerateSwell() off the message thread; the editor swaps the result in on done.
+void BacktraceProcessor::requestRender(bool autoPlay)
+{
+    pendingAutoPlay.store(autoPlay);
+    rendering.store(true);
+    renderRequested.store(true);
+    if (renderThread) renderThread->notify();
+}
 
 // ===========================================================================
 //  Lifecycle
@@ -138,13 +161,23 @@ void BacktraceProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
         const auto* p0 = playBuffer.getReadPointer(0);
         const auto* p1 = playBuffer.getReadPointer(1);
 
+        const bool  stopping = playStopping.load();
+        const float dec = 1.0f / juce::jmax(1.0f, (float) (currentSR * 0.015));   // ~15 ms release on Stop
+        float g = playGain.load(std::memory_order_relaxed);   // block-local: no per-sample atomics, no race
         for (int i = 0; i < numSmp; ++i)
         {
-            if (pos >= len) { o0[i] = 0.0f; if (o1) o1[i] = 0.0f; playPlaying.store(false); continue; }
-            o0[i] = p0[pos];
-            if (o1) o1[i] = p1[pos];
+            if (pos >= len || (stopping && g <= 0.0f))
+            {
+                o0[i] = 0.0f; if (o1) o1[i] = 0.0f;
+                playPlaying.store(false); playStopping.store(false); g = 1.0f;
+                continue;
+            }
+            if (stopping) g = juce::jmax(0.0f, g - dec);   // click-free fade-out
+            o0[i] = p0[pos] * g;
+            if (o1) o1[i] = p1[pos] * g;
             ++pos;
         }
+        playGain.store(g, std::memory_order_relaxed);
         playPos.store(pos);
     }
 
@@ -165,7 +198,11 @@ void BacktraceProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
 // ===========================================================================
 juce::AudioProcessorEditor* BacktraceProcessor::createEditor()
 {
+   #ifdef BACKTRACE_NO_EDITOR
+    return nullptr;                  // headless test build has no GUI
+   #else
     return new BacktraceEditor(*this);
+   #endif
 }
 
 // Full creative state as JSON — fixes session persistence (was APVTS-only) and
@@ -188,6 +225,8 @@ juce::var BacktraceProcessor::getStateVar() const
     mac->setProperty("damage", macroDamage.load());
     mac->setProperty("reveal", macroReveal.load());
     mac->setProperty("width",  macroWidth.load());
+    mac->setProperty("ringout", macroRingout.load());
+    mac->setProperty("level",   macroLevel.load());
     o->setProperty("macros", juce::var(mac));
 
     auto* d = new juce::DynamicObject();
@@ -253,12 +292,14 @@ void BacktraceProcessor::setStateVar(const juce::var& v)
     auto macv = [&](const juce::var& m, const char* k, float def)
     { auto* mo = m.getDynamicObject(); return (mo && mo->hasProperty(k)) ? (float) (double) mo->getProperty(k) : def; };
     const juce::var mv = o->getProperty("macros");
-    macroSwell.store (juce::jlimit(0.0f, 1.0f, macv(mv, "swell",  1.0f)));
+    macroSwell.store (juce::jlimit(0.0f, 1.0f, macv(mv, "swell",  0.5f)));   // Pull default = natural
     macroTail.store  (juce::jlimit(0.0f, 1.0f, macv(mv, "tail",   0.35f)));
     macroGhost.store (juce::jlimit(0.0f, 1.0f, macv(mv, "ghost",  0.0f)));
     macroDamage.store(juce::jlimit(0.0f, 1.0f, macv(mv, "damage", 0.0f)));
     macroReveal.store(juce::jlimit(0.0f, 1.0f, macv(mv, "reveal", 1.0f)));
     macroWidth.store (juce::jlimit(0.0f, 1.0f, macv(mv, "width",  0.7f)));
+    macroRingout.store(juce::jlimit(0.0f, 1.0f, macv(mv, "ringout", 0.2f)));
+    macroLevel.store (juce::jlimit(0.0f, 1.0f, macv(mv, "level",  0.8f)));
 
     if (auto* d = o->getProperty("delay").getDynamicObject())
     {
@@ -455,6 +496,7 @@ juce::File BacktraceProcessor::writeProcessed(const juce::File& dir, const juce:
     // Stage 1 (render the printed swell if needed) + stage 2 (the user's trim /
     // fades / filter edits). Print / export / drag all bake the SAME edited result,
     // so hear = print = export = drag stays true.
+    if (rendering.load()) return {};   // a background render is in flight — don't touch swellBuffer
     ensureSwell();
     if (! swellValid.load()) return {};
 
@@ -575,6 +617,7 @@ void BacktraceProcessor::startSourceAudition()
     auditionWhat.store(1);   // source
     playLen.store(len);
     playPos.store(0);
+    playStopping.store(false); playGain.store(1.0f);
     playPlaying.store(true);
 }
 
@@ -602,6 +645,7 @@ juce::File BacktraceProcessor::importToSlot(int slot, const juce::File& wav,
                                             juce::int64 startSample, juce::int64 numSamples)
 {
     if (! slotValid(slot)) return {};
+    if (rendering.load()) return {};   // don't mutate a source buffer the render worker may be reading
 
     juce::AudioFormatManager fm;
     fm.registerBasicFormats();
@@ -620,9 +664,12 @@ juce::File BacktraceProcessor::importToSlot(int slot, const juce::File& wav,
     const int rawN = (int) juce::jmin(want, capRaw);
     if (rawN <= 0) return {};
 
-    juce::AudioBuffer<float> raw(2, rawN);
-    raw.clear();
+    if (importTemp.getNumChannels() < 2 || importTemp.getNumSamples() < rawN)
+        importTemp.setSize(2, rawN, false, false, true);   // reused scratch (no per-import 20 MB alloc)
+    auto& raw = importTemp;
+    for (int c = 0; c < 2; ++c) raw.clear(c, 0, rawN);
     reader->read(&raw, 0, rawN, startS, true, true);     // mono files fill both channels
+    reader.reset();                                       // release the file reader/stream promptly
 
     auto& s = sourceSlots[(size_t) slot];
     int n = rawN;
@@ -683,6 +730,7 @@ void BacktraceProcessor::startReverseAudition(bool forceRegen)
     auditionWhat.store(2);   // swell
     playLen.store(len);
     playPos.store(0);
+    playStopping.store(false); playGain.store(1.0f);
     playPlaying.store(true);
 }
 
@@ -691,6 +739,7 @@ void BacktraceProcessor::startReverseAudition(bool forceRegen)
 // swell will be weak." Same generator (applySwellFX) the reverse swell reverses.
 int BacktraceProcessor::renderTail(juce::AudioBuffer<float>& dest)
 {
+    if (rendering.load()) return 0;   // the worker is using the FX machines — don't run them here too
     const int selLen = trimOut.load() - trimIn.load();
     if (selLen <= 0) return 0;
     juce::ScopedNoDenormals noDenormals;
@@ -725,6 +774,7 @@ void BacktraceProcessor::startTailAudition()
     auditionWhat.store(3);   // forward wet tail
     playLen.store(len);
     playPos.store(0);
+    playStopping.store(false); playGain.store(1.0f);
     playPlaying.store(true);
 }
 
@@ -749,7 +799,11 @@ void BacktraceProcessor::regenerateSwell()
     {
         if (trimOut.load() - trimIn.load() <= 0) { swellValid.store(false); swellChangedFlag.store(true); return; }
         const bool swell = swellMode.load();
-        const int total = swell ? swellLengthSamples() : (baseLen() + extraTail());
+        // Clamp to the fixed audition buffer (minus ringout headroom) so applyEdit() NEVER
+        // reallocates playBuffer — a realloc there would race the audio thread reading it.
+        // Only bites at absurd tempos where a swell would exceed ~57 s; normal use is far under.
+        const int cap   = juce::jmax(1, playBuffer.getNumSamples() - (int) (currentSR * 3.5));
+        const int total = juce::jmin(cap, swell ? swellLengthSamples() : (baseLen() + extraTail()));
         if (total <= 0) { swellValid.store(false); swellChangedFlag.store(true); return; }
         swellBuffer.setSize(2, total, false, false, true);
         len = swell ? renderSwell(swellBuffer, total) : renderProcessed(swellBuffer, total);
@@ -771,7 +825,10 @@ void BacktraceProcessor::regenerateSwell()
     // canvas + every output use the shaped swell. (A Print slot is already baked.)
     if (! viewingPrint)
     {
-        swellRawBuffer.makeCopyOf(swellBuffer);
+        const int sn = swellBuffer.getNumSamples();                       // reuse the cache buffer (no realloc churn)
+        if (swellRawBuffer.getNumChannels() < 2 || swellRawBuffer.getNumSamples() < sn)
+            swellRawBuffer.setSize(2, sn, false, false, true);
+        for (int c = 0; c < 2; ++c) swellRawBuffer.copyFrom(c, 0, swellBuffer, c, 0, sn);
         reshapeSwellMacro();
     }
 
@@ -824,11 +881,19 @@ void BacktraceProcessor::regenerateSwell()
 // envelope is unity → the natural bloom is heard untouched. Below 100% it lifts the
 // early/quiet part (flattens the rise) for a subtler throw. env(1) == 1 ALWAYS, so
 // the landing point and timing never move — only the early shape.
+// PULL — the reverse-swell energy curve (was "Swell"). Shapes how dramatically the rise
+// pulls into the landing, on top of the natural reverb decay. Applied ONLY over the rise
+// region [0, landing); the aftertail/ringout past the landing keeps its natural decay.
+// env(landing) == 1 ALWAYS, so the landing/timing never move. 0.5 = natural (no extra
+// shaping). Below 0.5 lifts the quiet start (more even). Above 0.5 pulls the start down
+// (more dramatic, late bloom) — but always quiet-but-present at the default/centre.
 void BacktraceProcessor::reshapeSwellMacro()
 {
     const int n = swellRenderLen;
     if (viewingPrint || n <= 1 || swellRawBuffer.getNumSamples() < n) return;
-    const float s = macroSwell.load();
+    const float p    = macroSwell.load();                  // "Pull": 0 even · 0.5 natural · 1 dramatic
+    const float amt  = (p - 0.5f) * 2.0f;                  // -1 (even) .. +1 (dramatic)
+    const int   land = juce::jlimit(2, n, swellLandingSamp.load() > 1 ? swellLandingSamp.load() : n);
     if (swellBuffer.getNumSamples() < n) swellBuffer.setSize(2, n, false, false, true);
     for (int c = 0; c < swellBuffer.getNumChannels(); ++c)
     {
@@ -836,8 +901,13 @@ void BacktraceProcessor::reshapeSwellMacro()
         float* d = swellBuffer.getWritePointer(c);
         for (int i = 0; i < n; ++i)
         {
-            const float x   = (float) i / (float) (n - 1);
-            const float env = 1.0f + (1.0f - s) * 1.2f * std::pow(1.0f - x, 1.5f);   // 100%=natural, lower=flatter
+            float env = 1.0f;
+            if (i < land)                                  // shape the RISE only
+            {
+                const float x = (float) i / (float) (land - 1);          // 0 far-tail → 1 landing
+                if (amt >= 0.0f) env = (1.0f - amt) + amt * (0.05f + 0.95f * std::pow(x, 2.5f));  // pull start DOWN
+                else             env = 1.0f + (-amt) * std::pow(1.0f - x, 1.5f);                   // lift start UP
+            }
             d[i] = raw[i] * env;
         }
     }
@@ -847,6 +917,7 @@ void BacktraceProcessor::reshapeSwellMacro()
 // ---- Stage 2: trim → filter → fades → Damage/Reveal/Width → loudness → safety. ----
 int BacktraceProcessor::applyEdit(juce::AudioBuffer<float>& dest)
 {
+    if (rendering.load()) return 0;   // worker owns swellBuffer mid-render — never read it here
     if (! swellValid.load() || swellRenderLen <= 0) return 0;
 
     const int a = juce::jlimit(0, swellRenderLen, swellTrimIn.load());
@@ -931,7 +1002,7 @@ int BacktraceProcessor::applyEdit(juce::AudioBuffer<float>& dest)
     for (int c = 0; c < dest.getNumChannels(); ++c)
         pk = juce::jmax(pk, dest.getMagnitude(c, 0, len));
     if (pk > 1.0e-4f)
-        dest.applyGain(0, len, juce::jmin(0.70f / pk, 8.0f));
+        dest.applyGain(0, len, juce::jmin(0.60f / pk, 8.0f));   // consistent target w/ headroom (was 0.70 — tamed hot snares)
 
     // ---- Width macro: Dust 12.47 mono-safe two-stage widener (Common/DSP). ----
     // Stage A scales existing side; Stage B adds decorrelated artificial side from
@@ -943,6 +1014,15 @@ int BacktraceProcessor::applyEdit(juce::AudioBuffer<float>& dest)
         swellWidener.reset();
         swellWidener.setWidthImmediate(macroWidth.load() * 100.0f);
         swellWidener.process(dest.getWritePointer(0), dest.getWritePointer(1), len);
+    }
+
+    // ---- Swell Level — user output trim on the final swell (−24..+6 dB). Applied to the
+    // whole stereo buffer equally (mono-safety ratio untouched), after loudness comp/Width
+    // and before the safety ceiling so a hot push still can't run away. Same buffer feeds
+    // Play Swell / Print / Export / Drag → they all match.
+    {
+        const float g = juce::Decibels::decibelsToGain(levelToDb(macroLevel.load()));
+        if (std::abs(g - 1.0f) > 1.0e-4f) dest.applyGain(0, len, g);
     }
 
     applyOutputSafety(dest, len);   // peak ceiling (soft-clip > 0.9) catches wide-image peaks
@@ -1103,11 +1183,21 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
     // Density rises with length for body on long swells. The decay-fit IS the engine;
     // time-fit downstream is only the last-mile correction.
     const double densityAmt = juce::jlimit(0.0, 1.0, (swellSec - 1.0) / 6.0);   // longer swell → denser tail
+    // Capture window MUST be long enough to catch the full FX tail (every delay repeat +
+    // reverb decay), or repeats that fall past the window are lost and the delay seems to
+    // "not catch". Size = max(swell-fit budget, source + measured FX tail + margin).
+    const int fxTail = hasFX ? (tailLen() + reverbTailLen()) : 0;
+    // The tail now DECAYS within ~one swell length, so the window only needs to reach a
+    // little past the -40 dB point (no more 2×swellLen sustain budget) — smaller buffer =
+    // faster render + far less memory churn. Delay modes still get room for their repeats.
     const int renderLen = hasFX
-        ? juce::jlimit(selLen + 1, (int) (currentSR * 25.0),
-                       (int) (swellLen * 2.0) + selLen + (int) (currentSR * 1.0))
+        ? juce::jlimit(selLen + 1, (int) (currentSR * 24.0),
+                       juce::jmax(selLen + swellLen + (int) (currentSR * 0.7),
+                                  selLen + fxTail + (int) (currentSR * 0.5)))
         : selLen;
-    juce::AudioBuffer<float> work(2, renderLen);
+    if (renderWork.getNumChannels() < 2 || renderWork.getNumSamples() < renderLen)
+        renderWork.setSize(2, renderLen, false, false, true);   // reused scratch (grows, never per-render alloc)
+    auto& work = renderWork;
 
     auto renderWet = [&](float decayOv) -> int
     {
@@ -1142,16 +1232,22 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
     const bool tailUsesReverb = (mode != (int) RoutingMode::DelaySwell) && reverbFlavor.load() != 0;
     if (hasFX && tailUsesReverb)                               // reverb generates the tail → fit it
     {
-        float decayOv = juce::jlimit(0.45f, 1.0f, 0.45f + (float) swellSec * 0.05f);   // first estimate
+        // NATURAL DECAY (not sustain): aim for the -40 dB point to land ~AT the end of the
+        // swell window (ratio ≈ 1), so across [tailStart, tailStart+swellLen] the forward
+        // tail falls a full ~40 dB (loud just-after-source → quiet far tail). Reversed, that
+        // becomes a real rising swell — NOT a constant drone. The old band [0.95,1.6] let the
+        // tail run up to 1.6× the window (barely decaying → flat); the tight band + lower
+        // start estimate make the reverb DECAY within the window instead of being pumped up.
+        float decayOv = juce::jlimit(0.10f, 0.92f, 0.10f + (float) swellSec * 0.085f);   // first estimate
         for (int pass = 0; pass < 3; ++pass)
         {
             if (renderWet(decayOv) <= 0) return 0;
             washLen = measureTail();
-            const double ratio = (double) (washLen - tailStartFixed) / (double) swellLen;   // TAIL after the marker vs target
-            if (ratio >= 0.95 && ratio <= 1.6) break;                    // tail reaches the length → done
+            const double ratio = (double) (washLen - tailStartFixed) / (double) swellLen;   // -40 dB point vs target
+            if (ratio >= 0.9 && ratio <= 1.2) break;                     // tail decays right at the landing window
             const float prev = decayOv;
-            if (ratio < 0.95) decayOv = juce::jmin(1.0f, decayOv + juce::jmax(0.07f, (float) ((1.0  - ratio) * 0.5)));
-            else              decayOv = juce::jmax(0.3f, decayOv - juce::jmax(0.07f, (float) ((ratio - 1.4) * 0.25)));
+            if (ratio < 0.9) decayOv = juce::jmin(0.97f, decayOv + juce::jmax(0.05f, (float) ((1.0  - ratio) * 0.45)));
+            else             decayOv = juce::jmax(0.06f, decayOv - juce::jmax(0.05f, (float) ((ratio - 1.05) * 0.30)));
             if (std::abs(decayOv - prev) < 0.01f) break;                 // converged / hit a limit
         }
     }
@@ -1206,17 +1302,41 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
         }
     }
 
-    // short de-click fades at the buffer boundaries
-    const int fin  = juce::jmin(swellLen / 2, (int) (currentSR * 0.010));
-    const int fout = juce::jmin(swellLen / 2, (int) (currentSR * 0.005));
+    // ---- Aftertail / ringout: continue the FORWARD wet tail PAST the landing so the
+    // swell decays naturally instead of dead-stopping on its loudest sample. The reversed
+    // rise lands on work[tailStart] (= dest[swellLen-1]); the forward tail work[tailStart+1..]
+    // continues seamlessly from there (same sample value at the seam → no click). Only when
+    // the natural (un-stretched) tail was used, and clamped to the tail actually rendered so
+    // we never print invented silence. The Landing marker stays at swellLen; ringout follows.
+    int ringout = 0;
+    if (tailLen >= swellLen)
+        ringout = juce::jlimit(0, juce::jmax(0, washLen - tailStart - 1), swellRingoutSamples());
+
+    const int outLen = swellLen + ringout;
+    if (dest.getNumSamples() < outLen || dest.getNumChannels() < 2)
+        dest.setSize(2, outLen, true, true, true);   // keep the rise, zero the new tail region
+    for (int c = 0; c < dest.getNumChannels(); ++c)
+    {
+        const int sc = juce::jmin(c, work.getNumChannels() - 1);
+        auto* d = dest.getWritePointer(c);
+        const auto* w = work.getReadPointer(sc);
+        for (int i = 0; i < ringout; ++i) d[swellLen + i] = w[tailStart + 1 + i];
+    }
+
+    // Boundary shaping: a short fade-IN on the quiet rise start, and a musical release at
+    // the VERY END (never at the landing) so nothing hard-cuts. Ringout off → the release
+    // alone replaces the old 5 ms chop; Ringout on → it just seats the natural decay.
+    const int fin = juce::jmin(swellLen / 2, (int) (currentSR * 0.010));
+    const int rel = juce::jmin(outLen / 2, (int) (currentSR * (ringout > 0 ? 0.040 : 0.055)));   // gentler when no tail
     for (int c = 0; c < dest.getNumChannels(); ++c)
     {
         auto* d = dest.getWritePointer(c);
-        for (int i = 0; i < fin;  ++i) d[i] *= (float) i / (float) fin;
-        for (int i = 0; i < fout; ++i) d[swellLen - 1 - i] *= (float) i / (float) fout;
+        for (int i = 0; i < fin; ++i) d[i] *= (float) i / (float) fin;
+        for (int i = 0; i < rel; ++i) d[outLen - 1 - i] *= (float) i / (float) rel;
     }
 
-    applyOutputSafety(dest, swellLen);
+    swellLandingSamp.store(swellLen);   // landing = end of the rise; ringout extends past it
+    applyOutputSafety(dest, outLen);
 
    #if JUCE_DEBUG
     {
@@ -1225,11 +1345,11 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
         for (int i = 0; i < swellLen; ++i) sum += std::abs((double) d[i]) * (1.0 + 0.001 * i);
         DBG("[Backtrace tail] type=" << routingModeName(mode)
             << " tailStart=" << tailStart << " tailLen=" << tailLen
-            << " washLen=" << washLen << " swellLen=" << swellLen
+            << " washLen=" << washLen << " swellLen=" << swellLen << " ringout=" << ringout
             << " stretch=" << (tailLen >= swellLen ? "none" : "fit") << " checksum=" << juce::String(sum, 3));
     }
    #endif
-    return swellLen;
+    return outLen;
 }
 
 int BacktraceProcessor::baseLen() const
@@ -1298,7 +1418,8 @@ void BacktraceProcessor::clearSource(int i)
 {
     if (! slotValid(i)) return;
     auto& s = sourceSlots[(size_t) i];
-    s.buffer.setSize(0, 0); s.length = 0; s.status = SlotEmpty; s.name = {};
+    s.buffer = juce::AudioBuffer<float>();   // move-assign empty → actually frees the old allocation
+    s.length = 0; s.status = SlotEmpty; s.name = {};
     if (i == activeSource) { trimIn.store(0); trimOut.store(0); swellStale.store(true); }
     slotsChangedFlag.store(true);
 }
@@ -1307,7 +1428,8 @@ void BacktraceProcessor::clearPrint(int i)
 {
     if (! slotValid(i)) return;
     auto& s = printSlots[(size_t) i];
-    s.buffer.setSize(0, 0); s.length = 0; s.status = SlotEmpty; s.name = {};
+    s.buffer = juce::AudioBuffer<float>();   // move-assign empty → actually frees the old allocation
+    s.length = 0; s.status = SlotEmpty; s.name = {};
     if (i == activePrint && viewingPrint) { viewingPrint = false; swellStale.store(true); }
     slotsChangedFlag.store(true);
 }
@@ -1491,6 +1613,17 @@ int BacktraceProcessor::extraTail() const
     if (delayFlavor.load() == 0 && reverbFlavor.load() == 0) return 0;
     const int t = tailLen() + reverbTailLen();
     return juce::jlimit((int) (2.0 * currentSR), (int) (45.0 * currentSR), t);
+}
+
+// Desired aftertail length (samples) from the Ringout macro: 0 = off (a short
+// release fade still prevents a hard cut), scaling up to ~3 s of natural forward
+// FX tail printed AFTER the landing. The render clamps this to the tail actually
+// available so it never invents silence.
+int BacktraceProcessor::swellRingoutSamples() const
+{
+    const float rg = macroRingout.load();
+    if (rg <= 0.001f) return 0;
+    return (int) (juce::jlimit(0.0f, 1.0f, rg) * 3.0f * (float) currentSR);
 }
 
 // Global routing safety layer (applied after every mode): per-channel DC blocker
