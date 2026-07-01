@@ -293,6 +293,12 @@ public:
     void  rebuildLiveIR();                  // worker: render reverb tail of an impulse → reverse → load
     void  buildLiveKernel(juce::AudioBuffer<float>& ir);  // synth the reversed-reverb kernel into ir (sized ch×M)
     int   preverbLengthSamples() const;     // pre-swell length (samples), DAW-tempo-locked
+    // Preverb latency reported to the host — DETERMINISTIC from the known pre-swell length, NOT
+    // gated on the async kernel load. This must be right the moment the plugin is prepared (GUI
+    // may never open in a session), or the host can't compensate and the swell lands wrong. It
+    // equals LivePreverb's dry delay (convLatency + M-1), so report and internal delay agree.
+    int   liveLatencyTarget() const
+    { return liveMode.load() ? (livePreverb.convLatency() + juce::jmax(0, preverbLengthSamples() - 1)) : 0; }
     void  pushLiveLatencyIfChanged();       // message thread: setLatencySamples + updateHostDisplay
     bool  liveReady() const     { return livePreverb.isReady(); }
     bool  liveConvLoaded() const { return livePreverb.loadedIRSize() > 0; }   // convolution kernel finished loading

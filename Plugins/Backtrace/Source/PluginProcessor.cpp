@@ -114,9 +114,9 @@ void BacktraceProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     livePreverb.prepare(sampleRate, samplesPerBlock, getTotalNumInputChannels());
     dspPrepared.store(true);               // all DSP sized → the worker may now build the live IR
     if (liveMode.load()) requestLiveIR();  // build the preverb kernel only when Live mode is active
-    {                                       // SAME formula as pushLiveLatencyIfChanged → no disagreement,
-        const int lat0 = (liveMode.load() && livePreverb.isReady()) ? livePreverb.getLatencySamples() : 0;
-        setLatencySamples(lat0);            // so the host never gets caught in a re-sync loop
+    {                                       // deterministic (not isReady-gated) → the host gets the
+        const int lat0 = liveLatencyTarget();   // preverb latency immediately, even with the GUI closed
+        setLatencySamples(lat0);
         liveLatencyApplied.store(lat0);
     }
 
@@ -320,6 +320,7 @@ void BacktraceProcessor::setStateVar(const juce::var& v)
     if (o->hasProperty("liveFeel")) liveFeel.store((int) o->getProperty("liveFeel"));
     if (o->hasProperty("liveShape")) liveShape.store((float) (double) o->getProperty("liveShape"));
     requestLiveIR();                                  // rebuild the preverb kernel for restored settings
+    if (dspPrepared.load()) pushLiveLatencyIfChanged();   // report restored preverb latency w/o needing the GUI
 
     // Global swell macros — default to a strong, neutral set when absent (older
     // states / presets without macro data), so Swell is 100% out of the box.
@@ -1323,10 +1324,11 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
 }
 
 // Message-thread: report the Live Preverb dry-delay to the host so PDC pulls the
-// preverb in front of the original sound. 0 when not in Live mode / IR not ready yet.
+// preverb in front of the original sound. Deterministic from the pre-swell length (see
+// liveLatencyTarget) so it's correct even before the async kernel finishes loading.
 void BacktraceProcessor::pushLiveLatencyIfChanged()
 {
-    const int target = (liveMode.load() && livePreverb.isReady()) ? livePreverb.getLatencySamples() : 0;
+    const int target = liveLatencyTarget();
     if (target != liveLatencyApplied.load())
     {
         liveLatencyApplied.store(target);
