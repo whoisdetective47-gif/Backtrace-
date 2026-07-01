@@ -1242,7 +1242,11 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
         const float tone     = reverbParam[3].load();
         const float lpHz     = juce::jlimit(3000.0f, 15000.0f, 8500.0f * (0.7f + tone * 0.6f) * std::pow(2.0f, oct * 0.5f));
         const float baseRate = 2.6f + micro * 2.0f;                         // confirmed-good build-up (Shape 0.5)
-        const float envRate  = juce::jlimit(0.8f, 7.0f, baseRate + (liveShape.load() - 0.5f) * 5.0f);
+        const float shapeDev = liveShape.load() - 0.5f;                     // -0.5 Gentle .. 0 default .. +0.5 Bloom
+        // Asymmetric: Gentle side kept as-is (user liked it); Bloom side ~20% more urgent — a
+        // steeper, later surge. Ceiling raised so short (micro) modes can reach the extra urgency too.
+        const float spread   = (shapeDev >= 0.0f) ? 6.0f : 5.0f;
+        const float envRate  = juce::jlimit(0.8f, 8.5f, baseRate + shapeDev * spread);
         const float aHp     = (float) std::exp(-2.0 * juce::MathConstants<double>::pi * 110.0 / juce::jmax(1.0, currentSR));
         const float aLp     = 1.0f - (float) std::exp(-2.0 * juce::MathConstants<double>::pi * lpHz / juce::jmax(1.0, currentSR));
         for (int c = 0; c < ch; ++c)
