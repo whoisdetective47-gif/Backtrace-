@@ -112,7 +112,10 @@ public:
                 dline[wp] = in;
                 int rp = wp - dl; if (rp < 0) rp += dN;
                 float o = dline[rp] * dg + ((wet && i < wetN) ? w[i] * wg : 0.0f);
-                o = std::tanh(o);                                    // soft ceiling — protection only
+                // Transparent below 0.8 (clean signal passes UNCOLOURED); soft-clip only near
+                // the top as protection — not a tone-shaper.
+                if (o >  0.8f)      o =  0.8f + 0.2f * std::tanh((o - 0.8f) * 5.0f);
+                else if (o < -0.8f) o = -0.8f - 0.2f * std::tanh((-o - 0.8f) * 5.0f);
                 io[i] = o;
                 wg += wetInc; dg += dryInc;
                 if (++wp >= dN) wp = 0;

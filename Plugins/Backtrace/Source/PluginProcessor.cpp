@@ -1196,44 +1196,65 @@ void BacktraceProcessor::rebuildLiveIR()
     juce::AudioBuffer<float> ir(ch, M);
     ir.clear();
 
-    // ---- SMOOTH synthetic diffuse preverb kernel ----------------------------------------
-    // A reverse reverb's tail is DENSE DIFFUSE energy. Instead of reversing a resonant /
-    // shimmering algorithmic reverb (which rings + octave-pitch-shifts → harsh, metallic,
-    // "8-bit", and RESONATES so it blasts on tonal sources), synthesise the tail directly:
-    // decorrelated VELVET NOISE (dense random ± impulses = a smooth diffuse wash, no modal
-    // resonance, no shimmer) shaped by a build-up envelope and coloured by a tone filter. A
-    // non-resonant kernel is smooth AND can't blast. The Reverb TYPE + Tone knob just set the
-    // colour (dark ↔ bright); Octave tilts brightness (a diffuse wash has no pitch to shift).
+    // ---- HIGH-QUALITY synthetic diffuse preverb kernel ----------------------------------
+    // A reverse reverb's tail is DENSE DIFFUSE energy. Reversing a resonant/shimmering
+    // algorithmic reverb makes it ring + pitch-shift (harsh/metallic/8-bit) and blast on tonal
+    // sources, so we synthesise the tail directly — and shape it like a REAL hall tail reversed:
+    //   • dense decorrelated VELVET NOISE (smooth, non-resonant → can't ring or blast)
+    //   • EXPONENTIAL build-up (natural reverb decay, reversed): quiet far-tail → loud landing
+    //   • FREQUENCY-DEPENDENT decay: a position-varying lowpass opens from DARK (far-tail) to
+    //     BRIGHT (landing), so the swell BLOOMS OPEN like a real space — this evolving spectrum
+    //     is what makes it sound expensive rather than a flat, static noise wash.
+    //   • mono-safe stereo (side high-passed → lows centred, highs wide) so it never collapses.
+    // Reverb TYPE + Tone knob set the landing brightness/colour; Octave tilts it up/down.
     const int   fl       = reverbFlavor.load();
-    const float toneKnob = reverbParam[3].load();                          // per-flavor Tone 0..1
-    const float oct      = pitchSemitones.load() / 12.0f;                  // octave → brightness tilt
-    const float baseLp   = fl == 1 ? 5200.0f : fl == 2 ? 7000.0f : fl == 3 ? 9500.0f
-                         : fl == 4 ? 8000.0f : fl == 5 ? 4200.0f : 6500.0f;
-    const float lpHz     = juce::jlimit(1000.0f, 15000.0f,
-                                        baseLp * (0.55f + toneKnob * 0.7f) * std::pow(2.0f, oct * 0.6f));
-    const float hpHz     = 130.0f;
-    const float riseExp  = 2.0f + micro * 1.6f;                            // quiet start → bloom; punchier for micro
-    const int   spacing  = juce::jmax(1, (int) (currentSR / 2600.0));      // ~2600 velvet impulses/sec = dense/smooth
+    const float toneKnob = reverbParam[3].load();
+    const float oct      = pitchSemitones.load() / 12.0f;
+    const float baseLp   = fl == 1 ? 6000.0f : fl == 2 ? 8000.0f : fl == 3 ? 11000.0f
+                         : fl == 4 ? 9000.0f : fl == 5 ? 5000.0f : 7000.0f;
+    const float brightHz = juce::jlimit(1500.0f, 16000.0f, baseLp * (0.60f + toneKnob * 0.7f) * std::pow(2.0f, oct * 0.5f));
+    const float darkHz   = juce::jlimit(400.0f, brightHz * 0.6f, 650.0f + micro * 1600.0f);   // far-tail darkness
+    const float envRate  = 3.5f + micro * 2.5f;                            // exp build-up; punchier for micro
+    const int   spacing  = juce::jmax(1, (int) (currentSR / 4500.0));      // ~4500 velvet impulses/sec (dense/smooth)
+    const float hpHz     = 120.0f;
+    const float lnDark   = std::log(darkHz), lnBright = std::log(brightHz);
+    const float aHp      = (float) std::exp(-2.0 * juce::MathConstants<double>::pi * hpHz / juce::jmax(1.0, currentSR));
 
-    const float aHp = (float) std::exp(-2.0 * juce::MathConstants<double>::pi * hpHz / juce::jmax(1.0, currentSR));
-    const float aLp = 1.0f - (float) std::exp(-2.0 * juce::MathConstants<double>::pi * lpHz / juce::jmax(1.0, currentSR));
     for (int c = 0; c < ch; ++c)
     {
         juce::Random rng ((juce::int64) 0x9E3779B1LL * (c + 1) ^ (juce::int64) fl * 2654435761LL ^ (juce::int64) M);
         float* d = ir.getWritePointer(c);
-        for (int g = 0; g < M; g += spacing)               // velvet noise — decorrelated per channel = width
+        for (int g = 0; g < M; g += spacing)               // decorrelated velvet noise per channel
         {
             const int pos = g + rng.nextInt(spacing);
             if (pos < M) d[pos] = rng.nextBool() ? 1.0f : -1.0f;
         }
-        float hpZ = 0.0f, lpZ = 0.0f;                       // colour: HPF de-mud + LPF warm → smooth diffuse wash
+        float hpZ = 0.0f, lpZ = 0.0f;
         for (int i = 0; i < M; ++i)
         {
+            const float t   = (M > 1) ? (float) i / (float) (M - 1) : 1.0f;                    // 0 far-tail → 1 landing
+            const float fc  = std::exp(lnDark + (lnBright - lnDark) * std::pow(t, 0.7f));       // opens toward the landing
+            const float aLp = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * fc / (float) juce::jmax(1.0, currentSR));
             float x = d[i];
-            hpZ = aHp * hpZ + (1.0f - aHp) * x; x = x - hpZ;
-            lpZ += aLp * (x - lpZ);             x = lpZ;
-            const float t = (M > 1) ? (float) i / (float) (M - 1) : 1.0f;  // 0 far-tail → 1 landing
-            d[i] = x * std::pow(t, riseExp);                               // build-up envelope
+            hpZ = aHp * hpZ + (1.0f - aHp) * x; x = x - hpZ;               // HPF de-mud
+            lpZ += aLp * (x - lpZ);             x = lpZ;                   // position-varying LPF (freq-dependent decay)
+            d[i] = x * std::exp((t - 1.0f) * envRate);                    // exponential build-up
+        }
+    }
+
+    // Mono-safe stereo: high-pass the SIDE so lows stay centred (mono-compatible) and only the
+    // highs spread wide — the pro reverb-width move (no hollow/phasey collapse in mono).
+    if (ch == 2)
+    {
+        float* L = ir.getWritePointer(0); float* R = ir.getWritePointer(1);
+        const float aSide = (float) std::exp(-2.0 * juce::MathConstants<double>::pi * 240.0 / juce::jmax(1.0, currentSR));
+        float sZ = 0.0f;
+        for (int i = 0; i < M; ++i)
+        {
+            const float mid = 0.5f * (L[i] + R[i]);
+            float side = 0.5f * (L[i] - R[i]);
+            sZ = aSide * sZ + (1.0f - aSide) * side; side = side - sZ;    // HPF the side channel
+            L[i] = mid + side; R[i] = mid - side;
         }
     }
 
