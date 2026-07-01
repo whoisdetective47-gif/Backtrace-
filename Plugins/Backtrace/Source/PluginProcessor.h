@@ -275,6 +275,10 @@ public:
     int   getLiveTimeIndex() const { return liveTimeIndex.load(); }
     void  setLiveFeel(int f)      { liveFeel.store(juce::jlimit(0, 2, f)); markTailDirty(); }
     int   getLiveFeel() const     { return liveFeel.load(); }
+    // SHAPE: morphs the swell build-up curve. 0.5 = the confirmed-good default; below = gentler,
+    // more gradual rise (energy present earlier); above = a more dramatic, back-loaded late bloom.
+    void  setLiveShape(float s)   { liveShape.store(juce::jlimit(0.0f, 1.0f, s)); markTailDirty(); }
+    float getLiveShape() const    { return liveShape.load(); }
     static double liveNoteQuarters(int idx)
     { static const double q[] = { 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0 }; return q[juce::jlimit(0, 7, idx)]; }
     static double liveFeelMult(int feel) { return feel == 1 ? 1.5 : feel == 2 ? (2.0 / 3.0) : 1.0; }
@@ -537,6 +541,7 @@ private:
     std::atomic<float> macroMix { 0.25f };       // GLOBAL dry/wet blend (the MIX knob)
     std::atomic<int>   liveTimeIndex { 3 };      // 0..7 = 1/32,1/16,1/8,1/4,1/2,1bar,2bar,4bar (default 1/4)
     std::atomic<int>   liveFeel { 0 };           // 0 Straight, 1 Dotted, 2 Triplet
+    std::atomic<float> liveShape { 0.5f };       // swell build-up curve; 0.5 = confirmed-good default
     static constexpr float kLiveIRGain = 0.40f;  // L2 (energy) target for the preverb kernel — usable, not blasting
     std::atomic<bool>  liveIRRequested { false }; // worker should rebuild the preverb IR
     std::atomic<int>   liveLatencyApplied { -1 }; // last latency pushed to the host

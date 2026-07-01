@@ -675,6 +675,48 @@ int main()
         proc.setMacroMix(0.25f); proc.setLiveMode(false);
     }
 
+    std::printf("12. Live Preverb SHAPE control (swell build-up curve):\n");
+    {
+        setReverb(proc, 3); proc.setDelayFlavor(0);
+        proc.setLiveTimeIndex(3); proc.setLiveFeel(0); proc.setPitchSemitones(0.0f);
+        proc.prepareToPlay(SR, 512);
+        const int M = proc.preverbLengthSamples();
+
+        // late/early energy ratio of the kernel — a bigger ratio = a more back-loaded (dramatic) bloom.
+        auto lateEarlyRatio = [&](float shape)
+        {
+            proc.setLiveShape(shape);
+            juce::AudioBuffer<float> k(2, M); proc.buildLiveKernel(k);
+            double eEarly = 0.0, eLate = 0.0;
+            for (int c = 0; c < 2; ++c)
+            {
+                const float* d = k.getReadPointer(c);
+                for (int i = 0;     i < M / 2; ++i) eEarly += (double) d[i] * d[i];
+                for (int i = M / 2; i < M;     ++i) eLate  += (double) d[i] * d[i];
+            }
+            return eLate / juce::jmax(1.0e-9, eEarly);
+        };
+        const double rGentle = lateEarlyRatio(0.15f);
+        const double rBloom  = lateEarlyRatio(0.85f);
+        check("SHAPE steepens the build-up (higher = more back-loaded bloom)", rBloom > rGentle * 1.25,
+              "gentle late/early=" + juce::String(rGentle, 2) + "  bloom=" + juce::String(rBloom, 2));
+
+        // Default (0.5) kernel stays finite and still rises into the landing (late half louder).
+        proc.setLiveShape(0.5f);
+        juce::AudioBuffer<float> k(2, M); proc.buildLiveKernel(k);
+        bool finite = true; double eA = 0.0, eB = 0.0;
+        for (int c = 0; c < 2; ++c)
+        {
+            const float* d = k.getReadPointer(c);
+            for (int i = 0; i < M; ++i) if (! std::isfinite(d[i])) finite = false;
+            for (int i = 0;     i < M / 2; ++i) eA += (double) d[i] * d[i];
+            for (int i = M / 2; i < M;     ++i) eB += (double) d[i] * d[i];
+        }
+        check("SHAPE default kernel finite + rises (late half louder)", finite && eB > eA,
+              "earlyE=" + juce::String(eA, 4) + " lateE=" + juce::String(eB, 4));
+        proc.setLiveShape(0.5f);
+    }
+
     std::printf("\nRESULT: %d passed, %d failed -> %s\n", g_pass, g_fail,
                 g_fail == 0 ? "ALL RENDER CHECKS PASS" : "FAILURES ABOVE");
     tmp.deleteRecursively();

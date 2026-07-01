@@ -240,6 +240,7 @@ juce::var BacktraceProcessor::getStateVar() const
     o->setProperty("liveMix",  (double) macroMix.load());
     o->setProperty("liveTime", liveTimeIndex.load());
     o->setProperty("liveFeel", liveFeel.load());
+    o->setProperty("liveShape", (double) liveShape.load());
     o->setProperty("preset", (currentPreset >= 0) ? getPresetName(currentPreset) : juce::String());
 
     auto* mac = new juce::DynamicObject();   // global swell macros
@@ -317,6 +318,7 @@ void BacktraceProcessor::setStateVar(const juce::var& v)
     if (o->hasProperty("liveMix"))  macroMix.store((float) (double) o->getProperty("liveMix"));
     if (o->hasProperty("liveTime")) liveTimeIndex.store((int) o->getProperty("liveTime"));
     if (o->hasProperty("liveFeel")) liveFeel.store((int) o->getProperty("liveFeel"));
+    if (o->hasProperty("liveShape")) liveShape.store((float) (double) o->getProperty("liveShape"));
     requestLiveIR();                                  // rebuild the preverb kernel for restored settings
 
     // Global swell macros — default to a strong, neutral set when absent (older
@@ -1233,11 +1235,14 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
     // Shape: gentle FIXED tone (HPF de-mud + soft LPF — NO sweep) + an exponential BUILD-UP
     // envelope so the swell always grows into the landing (the reverb gives the texture, this
     // gives the shape). The reverb's own HF damping already blooms dark→bright naturally.
+    // The SHAPE control steepens/softens that build-up: 0.5 = the confirmed-good default rate,
+    // lower = gentler/earlier energy, higher = a silent-then-dramatic late bloom.
     {
-        const float oct     = pitchSemitones.load() / 12.0f;
-        const float tone    = reverbParam[3].load();
-        const float lpHz    = juce::jlimit(3000.0f, 15000.0f, 8500.0f * (0.7f + tone * 0.6f) * std::pow(2.0f, oct * 0.5f));
-        const float envRate = 2.6f + micro * 2.0f;                          // amplitude build-up (no swoosh)
+        const float oct      = pitchSemitones.load() / 12.0f;
+        const float tone     = reverbParam[3].load();
+        const float lpHz     = juce::jlimit(3000.0f, 15000.0f, 8500.0f * (0.7f + tone * 0.6f) * std::pow(2.0f, oct * 0.5f));
+        const float baseRate = 2.6f + micro * 2.0f;                         // confirmed-good build-up (Shape 0.5)
+        const float envRate  = juce::jlimit(0.8f, 7.0f, baseRate + (liveShape.load() - 0.5f) * 5.0f);
         const float aHp     = (float) std::exp(-2.0 * juce::MathConstants<double>::pi * 110.0 / juce::jmax(1.0, currentSR));
         const float aLp     = 1.0f - (float) std::exp(-2.0 * juce::MathConstants<double>::pi * lpHz / juce::jmax(1.0, currentSR));
         for (int c = 0; c < ch; ++c)

@@ -559,6 +559,25 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     liveMixLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(liveMixLabel);
 
+    // SHAPE — morphs the swell build-up curve. Centre (50) is the confirmed-good default; the
+    // detent makes it easy to return to. Reads Gentle / Default / Bloom so it's obvious what it does.
+    liveShapeKnob.setSliderStyle(juce::Slider::LinearHorizontal);
+    liveShapeKnob.setRange(0.0, 1.0, 0.01);
+    liveShapeKnob.setDoubleClickReturnValue(true, 0.5);
+    liveShapeKnob.setTextBoxStyle(juce::Slider::TextBoxRight, false, 56, 16);
+    liveShapeKnob.setColour(juce::Slider::thumbColourId, juce::Colour(0xff7ad1ff));
+    liveShapeKnob.textFromValueFunction = [](double v)
+    { return v < 0.4 ? "Gentle" : v > 0.6 ? "Bloom" : "Default"; };
+    liveShapeKnob.onValueChange = [this] { proc.setLiveShape((float) liveShapeKnob.getValue()); };
+    liveShapeKnob.setTooltip("SHAPE — the swell's build-up curve. Centre = the default rise; left = gentler, "
+                             "energy earlier; right = silent-then-dramatic late bloom. Double-click to recentre.");
+    liveShapeKnob.updateText();
+    addAndMakeVisible(liveShapeKnob);
+    liveShapeLabel.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.6f));
+    liveShapeLabel.setFont(11.0f);
+    liveShapeLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(liveShapeLabel);
+
     // --- reverb space: flavor dropdown + remappable knob cluster ---
     reverbCaption.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.4f));
     reverbCaption.setFont(10.0f);
@@ -878,6 +897,7 @@ void BacktraceEditor::syncControlsFromProcessor()
     liveWetKnob.setValue(proc.getLiveWet(), juce::dontSendNotification);
     liveTimeBox.setSelectedId(proc.getLiveTimeIndex() + 1, juce::dontSendNotification);
     liveFeelBox.setSelectedId(proc.getLiveFeel() + 1, juce::dontSendNotification);
+    liveShapeKnob.setValue(proc.getLiveShape(), juce::dontSendNotification);
     liveMixKnob.setValue(proc.getMacroMix(), juce::dontSendNotification);
 
     const int df = proc.getDelayFlavor();
@@ -1881,6 +1901,12 @@ void BacktraceEditor::resized()
             liveTimeBox.setBounds(row.removeFromLeft(94));
             row.removeFromLeft(6);
             liveFeelBox.setBounds(row.removeFromLeft(92));
+        }
+        a.removeFromTop(4);
+        {                       // SHAPE — swell build-up curve
+            auto row = a.removeFromTop(22);
+            liveShapeLabel.setBounds(row.removeFromLeft(46));
+            liveShapeKnob.setBounds(row.removeFromLeft(184));
         }
         a.removeFromTop(4);
         {
