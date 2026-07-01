@@ -1195,50 +1195,47 @@ void BacktraceProcessor::rebuildLiveIR()
 
     juce::AudioBuffer<float> ir(ch, M);
     ir.clear();
+    ir.setSample(0, 0, 1.0f);                              // unit impulse → its reverb tail = the kernel
+    ir.setSample(1, 0, 1.0f);
 
-    // ---- HIGH-QUALITY synthetic diffuse preverb kernel ----------------------------------
-    // A reverse reverb's tail is DENSE DIFFUSE energy. Reversing a resonant/shimmering
-    // algorithmic reverb makes it ring + pitch-shift (harsh/metallic/8-bit) and blast on tonal
-    // sources, so we synthesise the tail directly — and shape it like a REAL hall tail reversed:
-    //   • dense decorrelated VELVET NOISE (smooth, non-resonant → can't ring or blast)
-    //   • EXPONENTIAL build-up (natural reverb decay, reversed): quiet far-tail → loud landing
-    //   • FREQUENCY-DEPENDENT decay: a position-varying lowpass opens from DARK (far-tail) to
-    //     BRIGHT (landing), so the swell BLOOMS OPEN like a real space — this evolving spectrum
-    //     is what makes it sound expensive rather than a flat, static noise wash.
-    //   • mono-safe stereo (side high-passed → lows centred, highs wide) so it never collapses.
-    // Reverb TYPE + Tone knob set the landing brightness/colour; Octave tilts it up/down.
-    const int   fl       = reverbFlavor.load();
-    const float toneKnob = reverbParam[3].load();
-    const float oct      = pitchSemitones.load() / 12.0f;
-    const float baseLp   = fl == 1 ? 6000.0f : fl == 2 ? 8000.0f : fl == 3 ? 11000.0f
-                         : fl == 4 ? 9000.0f : fl == 5 ? 5000.0f : 7000.0f;
-    const float brightHz = juce::jlimit(1500.0f, 16000.0f, baseLp * (0.60f + toneKnob * 0.7f) * std::pow(2.0f, oct * 0.5f));
-    const float darkHz   = juce::jlimit(400.0f, brightHz * 0.6f, 650.0f + micro * 1600.0f);   // far-tail darkness
-    const float envRate  = 3.5f + micro * 2.5f;                            // exp build-up; punchier for micro
-    const int   spacing  = juce::jmax(1, (int) (currentSR / 4500.0));      // ~4500 velvet impulses/sec (dense/smooth)
-    const float hpHz     = 120.0f;
-    const float lnDark   = std::log(darkHz), lnBright = std::log(brightHz);
-    const float aHp      = (float) std::exp(-2.0 * juce::MathConstants<double>::pi * hpHz / juce::jmax(1.0, currentSR));
+    // ---- Reverse-reverb preverb kernel from a REAL (smooth) reverb ----------------------
+    // The genuine reverse-reverb move: render the selected reverb's tail for an impulse, then
+    // REVERSE it → a swell that GROWS INTO the landing, carrying the reverb's own musical tone.
+    // A real reverb tail loses highs over time, so reversed it blooms dark→bright FOR FREE — NO
+    // artificial filter sweep (that made a "swoosh"), and it's a real reverb, NOT a noise wash.
+    // Shimmer is forced OFF (its octave pitch-shift is the metallic/"8-bit" artifact) and
+    // diffusion is high → smooth. Reverb TYPE picks the space; Tone/Octave colour it.
+    const float decayOv  = juce::jlimit(0.28f, 0.62f, 0.30f + (float) mSec * 0.05f);   // musical tail length
+    const float preScale = juce::jlimit(0.05f, 0.45f, (float) mSec / 0.8f);            // small pre-delay
+    const float density  = 0.55f + micro * 0.25f;                                       // dense diffusion → smooth
+    if (reverbFlavor.load() != 0)
+        applyReverb(ir, M, /*wetOnly*/ true, mSec, decayOv, density, /*shimmer OFF*/ 0.0f, preScale);
 
-    for (int c = 0; c < ch; ++c)
+    for (int c = 0; c < ch; ++c)                           // reverse → preverb (quiet build-up → loud landing)
+        std::reverse(ir.getWritePointer(c), ir.getWritePointer(c) + M);
+
+    // Shape: gentle FIXED tone (HPF de-mud + soft LPF — NO sweep) + an exponential BUILD-UP
+    // envelope so the swell always grows into the landing (the reverb gives the texture, this
+    // gives the shape). The reverb's own HF damping already blooms dark→bright naturally.
     {
-        juce::Random rng ((juce::int64) 0x9E3779B1LL * (c + 1) ^ (juce::int64) fl * 2654435761LL ^ (juce::int64) M);
-        float* d = ir.getWritePointer(c);
-        for (int g = 0; g < M; g += spacing)               // decorrelated velvet noise per channel
+        const float oct     = pitchSemitones.load() / 12.0f;
+        const float tone    = reverbParam[3].load();
+        const float lpHz    = juce::jlimit(3000.0f, 15000.0f, 8500.0f * (0.7f + tone * 0.6f) * std::pow(2.0f, oct * 0.5f));
+        const float envRate = 2.6f + micro * 2.0f;                          // amplitude build-up (no swoosh)
+        const float aHp     = (float) std::exp(-2.0 * juce::MathConstants<double>::pi * 110.0 / juce::jmax(1.0, currentSR));
+        const float aLp     = 1.0f - (float) std::exp(-2.0 * juce::MathConstants<double>::pi * lpHz / juce::jmax(1.0, currentSR));
+        for (int c = 0; c < ch; ++c)
         {
-            const int pos = g + rng.nextInt(spacing);
-            if (pos < M) d[pos] = rng.nextBool() ? 1.0f : -1.0f;
-        }
-        float hpZ = 0.0f, lpZ = 0.0f;
-        for (int i = 0; i < M; ++i)
-        {
-            const float t   = (M > 1) ? (float) i / (float) (M - 1) : 1.0f;                    // 0 far-tail → 1 landing
-            const float fc  = std::exp(lnDark + (lnBright - lnDark) * std::pow(t, 0.7f));       // opens toward the landing
-            const float aLp = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * fc / (float) juce::jmax(1.0, currentSR));
-            float x = d[i];
-            hpZ = aHp * hpZ + (1.0f - aHp) * x; x = x - hpZ;               // HPF de-mud
-            lpZ += aLp * (x - lpZ);             x = lpZ;                   // position-varying LPF (freq-dependent decay)
-            d[i] = x * std::exp((t - 1.0f) * envRate);                    // exponential build-up
+            float* d = ir.getWritePointer(c);
+            float hpZ = 0.0f, lpZ = 0.0f;
+            for (int i = 0; i < M; ++i)
+            {
+                float x = d[i];
+                hpZ = aHp * hpZ + (1.0f - aHp) * x; x = x - hpZ;
+                lpZ += aLp * (x - lpZ);             x = lpZ;
+                const float t = (M > 1) ? (float) i / (float) (M - 1) : 1.0f;
+                d[i] = x * std::exp((t - 1.0f) * envRate);
+            }
         }
     }
 
