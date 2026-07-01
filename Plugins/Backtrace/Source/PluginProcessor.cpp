@@ -1301,7 +1301,7 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
         for (int c = 0; c < ch; ++c)
         { const float* d = ir.getReadPointer(c); for (int i = 0; i < M; ++i) eSum += (double) d[i] * (double) d[i]; }
         const float rms = (float) std::sqrt(eSum / juce::jmax(1, ch * M));
-        const float thr = rms * 18.0f;                            // peak ceiling relative to body
+        const float thr = rms * 24.0f;                            // peak ceiling relative to body (gentle → keeps the wash lush)
         if (thr > 1.0e-9f)
             for (int c = 0; c < ch; ++c)
             {

@@ -35,8 +35,8 @@ inline juce::Array<ReverbKnob> reverbKnobLayout(int flavor)
     {
         case 1: // Velvet Hall — Lexicon-style hall/chamber
             add("Size",   0.0f, 1.0f,   0.55f);  add("Decay",     0.0f, 1.0f,   0.35f);
-            add("PreDly", 0.0f, 250.0f, 20.0f);  add("Tone",      0.0f, 1.0f,   0.55f);
-            add("Diffuse",0.0f, 1.0f,   0.65f);  add("Mod",       0.0f, 1.0f,   0.25f);
+            add("PreDly", 0.0f, 250.0f, 20.0f);  add("Tone",      0.0f, 1.0f,   0.66f);
+            add("Diffuse",0.0f, 1.0f,   0.72f);  add("Mod",       0.0f, 1.0f,   0.25f);
             add("Width",  0.0f, 1.0f,   0.70f);  add("Mix",       0.0f, 1.0f,   0.25f);
             add("Duck",   0.0f, 1.0f,   0.20f);  add("Output",  -24.0f, 12.0f,  0.00f);
             break;

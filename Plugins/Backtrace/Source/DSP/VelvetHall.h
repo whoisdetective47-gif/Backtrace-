@@ -79,17 +79,17 @@ public:
             lineLen[i] = juce::jlimit(4.0f, (float) (fdnMax[i] - 4), baseMs[i] * scale * 0.001f * (float) sampleRate);
             sumLen += lineLen[i];
         }
-        for (int i = 0; i < kDiff; ++i) diff[i].g = 0.4f + diffA * 0.35f;
+        for (int i = 0; i < kDiff; ++i) diff[i].g = 0.5f + diffA * 0.30f;    // lusher diffusion baseline → richer wash
 
         const float meanSec = (sumLen / (float) kLines) / (float) sampleRate;
         const float rt = juce::jlimit(0.3f, 18.0f, 0.71f * std::exp(3.23f * decay01));   // RT60 seconds
         decayGain = juce::jlimit(0.0f, 0.985f, std::pow(10.0f, -3.0f * meanSec / rt));
 
-        aDamp  = onePole(juce::jmap(tone, 0.0f, 1.0f, 2800.0f, 11000.0f));   // in-loop HF damping
+        aDamp  = onePole(juce::jmap(tone, 0.0f, 1.0f, 3400.0f, 12500.0f));   // in-loop HF damping (brighter, less dull)
         aInHP  = onePole(120.0f);
-        aInLP  = onePole(14000.0f);
+        aInLP  = onePole(15000.0f);
         aOutHP = onePole(150.0f);
-        aOutHC = onePole(juce::jmap(tone, 0.0f, 1.0f, 6500.0f, 13000.0f));   // output air with Tone
+        aOutHC = onePole(juce::jmap(tone, 0.0f, 1.0f, 8000.0f, 15000.0f));   // output air with Tone (brighter)
 
         modDepth = mod * (float) (sampleRate * 0.0020);
         modScale = 0.6f + mod * 1.4f;                                        // ~0.05–1.2 Hz range
