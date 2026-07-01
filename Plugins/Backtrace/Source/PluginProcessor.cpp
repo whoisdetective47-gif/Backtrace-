@@ -193,7 +193,7 @@ void BacktraceProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
     // ---- Live Preverb (Mode 2): real-time reverse-reverb swell into the delayed dry.
     // Replaces passthrough with: delayed dry + reversed-IR convolution wet. The host
     // compensates the reported latency so the preverb lands in front of the source.
-    if (liveMode.load() && ! playPlaying.load())
+    if (liveMode.load() && ! playPlaying.load() && ! livePreviewRendering.load())
     {
         const float mix = macroMix.load();                 // global dry/wet blend
         livePreverb.process(buffer, mix * liveWet.load(), (1.0f - mix) * liveDry.load());
@@ -1187,16 +1187,32 @@ void BacktraceProcessor::rebuildLiveIR()
     if (! dspPrepared.load()) { liveIRRequested.store(true); return; }
     const std::lock_guard<std::mutex> lk(liveIRMutex);   // never let two rebuilds touch the reverb objects at once
 
+    const int M = preverbLengthSamples();
+    juce::AudioBuffer<float> ir(2, M);
+    buildLiveKernel(ir);                                  // synth the reversed-reverb preverb kernel
+
+    livePreverb.setIR(std::move(ir), currentSR);
+   #if JUCE_DEBUG
+    DBG("[Backtrace liveIR] rebuilt: " << liveTimeLabel() << "  M=" << M
+        << " (" << juce::String((double) M / juce::jmax(1.0, currentSR) * 1000.0, 0) << " ms)  reverb="
+        << reverbFlavorName(reverbFlavor.load())
+        << "  oct=" << pitchSemitones.load());
+   #endif
+}
+
+// Synthesise the reversed-reverb PREVERB kernel into `ir` (already sized ch×M). Shared by the
+// live-IR rebuild (real-time convolution) and the offline Preview render, so both hear IDENTICAL
+// tone. Caller holds liveIRMutex and has confirmed the DSP is prepared.
+void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
+{
     juce::ScopedNoDenormals noDenormals;
-    const int    M    = preverbLengthSamples();
-    const int    ch   = 2;
+    const int    ch   = ir.getNumChannels();
+    const int    M    = ir.getNumSamples();
     const double mSec = (double) M / juce::jmax(1.0, currentSR);
     const float  micro = juce::jlimit(0.0f, 1.0f, (0.30f - (float) mSec) / 0.30f);
 
-    juce::AudioBuffer<float> ir(ch, M);
     ir.clear();
-    ir.setSample(0, 0, 1.0f);                              // unit impulse → its reverb tail = the kernel
-    ir.setSample(1, 0, 1.0f);
+    for (int c = 0; c < ch; ++c) ir.setSample(c, 0, 1.0f);   // unit impulse → its reverb tail = the kernel
 
     // ---- Reverse-reverb preverb kernel from a REAL (smooth) reverb ----------------------
     // The genuine reverse-reverb move: render the selected reverb's tail for an impulse, then
@@ -1275,13 +1291,6 @@ void BacktraceProcessor::rebuildLiveIR()
     { const float* d = ir.getReadPointer(c); for (int i = 0; i < M; ++i) e[c] += (double) d[i] * (double) d[i]; }
     const double l2 = std::sqrt(juce::jmax(e[0], e[1]));
     if (l2 > 1.0e-6) ir.applyGain((float) ((double) kLiveIRGain / l2));
-
-    livePreverb.setIR(std::move(ir), currentSR);
-   #if JUCE_DEBUG
-    DBG("[Backtrace liveIR] rebuilt: " << liveTimeLabel() << "  M=" << M
-        << " (" << juce::String(mSec * 1000.0, 0) << " ms)  reverb=" << reverbFlavorName(reverbFlavor.load())
-        << "  oct=" << pitchSemitones.load() << "  micro=" << juce::String(micro, 2));
-   #endif
 }
 
 // Message-thread: report the Live Preverb dry-delay to the host so PDC pulls the
@@ -1295,6 +1304,88 @@ void BacktraceProcessor::pushLiveLatencyIfChanged()
         setLatencySamples(target);
         updateHostDisplay();
     }
+}
+
+// PREVIEW LIVE: render the Live Preverb OFFLINE onto the active source and audition it, so the
+// exact live-mode sound is audible in the standalone (whose live input is muted). The signal
+// chain mirrors LivePreverb::process — wet = linear convolution of the source with the SAME
+// reversed-reverb kernel, dry delayed to land on the swell peak, identical gains + soft ceiling —
+// so what you hear here is what the DAW will play in Live mode. Uses one FFT per channel (fully
+// synchronous — no async kernel-load race), serialised with the render worker via liveIRMutex.
+void BacktraceProcessor::startLivePreview()
+{
+    if (! dspPrepared.load()) return;
+
+    const int in = trimIn.load(), out = trimOut.load();
+    int srcLen = out - in;
+    if (srcLen <= 0) return;
+
+    const auto& src = sourceSlots[(size_t) activeSource].buffer;
+    if (src.getNumSamples() < out) return;
+    const int sc = juce::jmax(1, juce::jmin(2, src.getNumChannels()));
+    srcLen = juce::jmin(srcLen, playBuffer.getNumSamples());   // bound to play capacity
+
+    // Build the preverb kernel exactly as Live mode does (under the IR lock so we never touch
+    // the reverb objects while the worker is rebuilding).
+    const int M = preverbLengthSamples();
+    juce::AudioBuffer<float> kernel(2, M);
+    {
+        const std::lock_guard<std::mutex> lk(liveIRMutex);
+        buildLiveKernel(kernel);
+    }
+
+    // FFT size for a wraparound-free LINEAR convolution: the smallest power of two ≥ srcLen+M-1.
+    int order = 1; while ((1 << order) < srcLen + M) ++order;
+    const int fftSize = 1 << order;
+    juce::dsp::FFT fft(order);
+
+    const float mix  = macroMix.load();
+    const float wetG = mix * liveWet.load();               // same wet/dry split as LivePreverb::process
+    const float dryG = (1.0f - mix) * liveDry.load();
+    const int   dly  = juce::jmax(0, M - 1);               // dry lands on the swell peak (kernel end)
+    const int   outLen = juce::jmin(playBuffer.getNumSamples(), srcLen + M);
+
+    playBuffer.clear();
+    std::vector<float> a((size_t) fftSize * 2), b((size_t) fftSize * 2);
+    for (int oc = 0; oc < playBuffer.getNumChannels(); ++oc)
+    {
+        const int kc  = juce::jmin(oc, kernel.getNumChannels() - 1);
+        const int scn = juce::jmin(oc, sc - 1);
+
+        std::fill(a.begin(), a.end(), 0.0f);
+        std::fill(b.begin(), b.end(), 0.0f);
+        for (int i = 0; i < srcLen; ++i) a[(size_t) i] = src.getSample(scn, in + i);
+        for (int i = 0; i < M;      ++i) b[(size_t) i] = kernel.getSample(kc, i);
+
+        fft.performRealOnlyForwardTransform(a.data(), false);
+        fft.performRealOnlyForwardTransform(b.data(), false);
+        for (int k = 0; k < fftSize; ++k)                  // pointwise complex multiply (interleaved re,im)
+        {
+            const float ar = a[(size_t) (2 * k)], ai = a[(size_t) (2 * k + 1)];
+            const float br = b[(size_t) (2 * k)], bi = b[(size_t) (2 * k + 1)];
+            a[(size_t) (2 * k)]     = ar * br - ai * bi;
+            a[(size_t) (2 * k + 1)] = ar * bi + ai * br;
+        }
+        fft.performRealOnlyInverseTransform(a.data());     // JUCE inverse is 1/N-scaled → linear conv directly
+
+        float* o = playBuffer.getWritePointer(oc);
+        for (int i = 0; i < outLen; ++i)
+        {
+            const float wet = (i < fftSize) ? a[(size_t) i] : 0.0f;
+            const int   di  = i - dly;
+            const float dry = (di >= 0 && di < srcLen) ? src.getSample(scn, in + di) : 0.0f;
+            float v = wet * wetG + dry * dryG;
+            if (v >  0.8f)      v =  0.8f + 0.2f * std::tanh((v - 0.8f) * 5.0f);   // same ceiling as live path
+            else if (v < -0.8f) v = -0.8f - 0.2f * std::tanh((-v - 0.8f) * 5.0f);
+            o[i] = v;
+        }
+    }
+
+    auditionWhat.store(4);   // live preview
+    playLen.store(outLen);
+    playPos.store(0);
+    playStopping.store(false); playGain.store(1.0f);
+    playPlaying.store(true);
 }
 
 // Routing-aware FX topology for the swell bloom (wet-only, decay-filled). This is

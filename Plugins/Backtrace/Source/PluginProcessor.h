@@ -287,12 +287,16 @@ public:
     { const int i = liveTimeIndex.load(); return i <= 1 ? "MICRO" : i <= 3 ? "TIGHT" : "PREVERB"; }
     void  requestLiveIR()       { liveIRRequested.store(true); if (renderThread) renderThread->notify(); }
     void  rebuildLiveIR();                  // worker: render reverb tail of an impulse → reverse → load
+    void  buildLiveKernel(juce::AudioBuffer<float>& ir);  // synth the reversed-reverb kernel into ir (sized ch×M)
     int   preverbLengthSamples() const;     // pre-swell length (samples), DAW-tempo-locked
     void  pushLiveLatencyIfChanged();       // message thread: setLatencySamples + updateHostDisplay
     bool  liveReady() const     { return livePreverb.isReady(); }
     bool  liveConvLoaded() const { return livePreverb.loadedIRSize() > 0; }   // convolution kernel finished loading
     void  liveProcessBlock(juce::AudioBuffer<float>& b)
     { const float mix = macroMix.load(); livePreverb.process(b, mix * liveWet.load(), (1.0f - mix) * liveDry.load()); }
+    // Preview: apply the Live Preverb to the active source OFFLINE + play it — so Live-mode
+    // sound is audible in the standalone (whose input is muted) for fast A/B tuning.
+    void  startLivePreview();
 
     // ---- Printed-swell editor stage (post-render trim / fades / filter) ----
     // The render (stage 1) fills swellBuffer; trim+fades+filter (stage 2) shape it
@@ -537,6 +541,7 @@ private:
     std::atomic<bool>  liveIRRequested { false }; // worker should rebuild the preverb IR
     std::atomic<int>   liveLatencyApplied { -1 }; // last latency pushed to the host
     std::atomic<bool>  dspPrepared { false };     // true only after prepareToPlay — gates worker DSP use
+    std::atomic<bool>  livePreviewRendering { false };  // offline preview render in progress → audio thread skips livePreverb
     std::mutex         liveIRMutex;               // serialises live-IR rebuilds (worker vs any direct call)
 
     std::vector<PresetEntry> presets;

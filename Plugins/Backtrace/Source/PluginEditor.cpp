@@ -511,6 +511,23 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     liveStatusLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(liveStatusLabel);
 
+    // Preview Live: offline-render the live preverb onto the active source and audition it —
+    // the only way to HEAR Live mode in the standalone (whose live input is muted).
+    livePreviewButton.onClick = [this]
+    {
+        if (proc.getAuditionWhat() == 4) { proc.stopReverseAudition(); return; }
+        proc.startLivePreview();
+        if (proc.getAuditionWhat() == 4)
+            statusLabel.setText("Previewing Live Preverb on the source", juce::dontSendNotification);
+        else
+            statusLabel.setText("Load/select a source first, then Preview Live", juce::dontSendNotification);
+    };
+    livePreviewButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xff7ad1ff));
+    livePreviewButton.setTooltip("Hear the LIVE PREVERB applied to the current source, rendered offline "
+                                 "(the standalone mutes live input, so this is how you audition Live mode). "
+                                 "Uses the current TIME/FEEL/Mix/Reverb/Octave — exactly what the DAW will play live.");
+    addAndMakeVisible(livePreviewButton);
+
     // TIME (tempo-synced pre-swell, like a delay) + FEEL (Straight/Dotted/Triplet)
     { const char* tn[] = { "1/32","1/16","1/8","1/4","1/2","1 bar","2 bars","4 bars" };
       for (int i = 0; i < 8; ++i) liveTimeBox.addItem(tn[i], i + 1); }
@@ -1538,6 +1555,7 @@ void BacktraceEditor::timerCallback()
     playSourceButton.setButtonText(aw == 1 ? "Stop" : "Play Source");
     reverseButton.setButtonText   (aw == 2 ? "Stop" : "Play Swell");
     auditionTailButton.setButtonText(aw == 3 ? "Stop" : "Audition Tail");
+    livePreviewButton.setButtonText(aw == 4 ? "Stop Preview" : "Preview Live");
 
     // audition playhead — source lane for Play Source, printed lane for Audition Swell
     if (aw == 1)      { waveform.setPlayhead(proc.getTrimIn() + proc.getPlayPos()); swellCanvas.setPlayhead(-1); }
@@ -1854,6 +1872,9 @@ void BacktraceEditor::resized()
             liveWetKnob.setBounds(row);
         }
         liveStatusLabel.setBounds(a.removeFromTop(12));
+        a.removeFromTop(3);
+        livePreviewButton.setBounds(a.removeFromTop(22).removeFromLeft(150));
+        a.removeFromTop(4);
         {                       // TIME (tempo-synced pre-swell) + FEEL
             auto row = a.removeFromTop(22);
             liveTimeLabel.setBounds(row.removeFromLeft(36));

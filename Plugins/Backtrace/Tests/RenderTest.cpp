@@ -619,6 +619,62 @@ int main()
         proc.setLiveMode(false);                       // restore Capture mode default
     }
 
+    std::printf("11. Live Preverb OFFLINE preview (audible in the standalone):\n");
+    {
+        loadSnare();                                   // hot transient into slot 0, trim = full
+        setReverb(proc, 3); proc.setDelayFlavor(0);
+        proc.setLiveTimeIndex(3); proc.setLiveFeel(0); // 1/4 Straight pre-swell
+        proc.setPitchSemitones(0.0f);
+        proc.setLiveWet(1.0f); proc.setLiveDry(1.0f); proc.setMacroMix(0.5f);
+        proc.setLiveMode(true);
+        proc.prepareToPlay(SR, 512);
+
+        proc.startLivePreview();                       // synchronous offline render → playBuffer
+        const int plen = proc.getPlayLen();
+        const int M    = proc.preverbLengthSamples();
+        check("preview ran (auditionWhat=4, playLen>0)", proc.getAuditionWhat() == 4 && plen > 0,
+              "playLen=" + juce::String(plen) + " M=" + juce::String(M));
+
+        // Drain the preview through the playback path (processBlock) and capture it — this is
+        // exactly what the standalone plays when you hit Preview Live.
+        juce::AudioBuffer<float> cap(2, juce::jmax(1, plen)); cap.clear();
+        juce::AudioBuffer<float> blk(2, 512);
+        int pos = 0; bool finite = true; float peak = 0.0f;
+        while (pos < plen && proc.getAuditionWhat() == 4)
+        {
+            const int n = juce::jmin(512, plen - pos);
+            blk.clear();
+            juce::MidiBuffer mi;
+            juce::AudioBuffer<float> sub(blk.getArrayOfWritePointers(), 2, n);
+            proc.processBlock(sub, mi);
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < n; ++i)
+            {
+                const float v = sub.getSample(c, i);
+                if (! std::isfinite(v)) finite = false;
+                cap.setSample(c, pos + i, v);
+                peak = juce::jmax(peak, std::abs(v));
+            }
+            pos += n;
+        }
+        check("preview output finite + bounded + audible", finite && peak <= 1.0f && peak > 0.02f,
+              "peak=" + juce::String(peak, 4));
+
+        // The preverb must LEAD IN: real swell energy exists BEFORE the dry landing (~sample M),
+        // and the output rises into the landing (a swell, not a flat wash).
+        auto rmsRange = [&](int a, int b) { double s = 0.0; int c2 = 0;
+            for (int c = 0; c < 2; ++c) for (int i = juce::jmax(0, a); i < b && i < plen; ++i)
+            { const float v = cap.getSample(c, i); s += (double) v * v; ++c2; }
+            return std::sqrt(s / juce::jmax(1, c2)); };
+        const double preRms  = rmsRange(M / 4, M * 3 / 4);                               // swell-only pre-roll
+        const double landRms = rmsRange(M, juce::jmin(plen, M + (int) (SR * 0.03)));      // at the dry landing
+        check("preview preverb leads in (audible swell before the source)", preRms > 0.002,
+              "preRms=" + juce::String(preRms, 4));
+        check("preview rises into the landing (swell, not a wash)", landRms > preRms,
+              "landRms=" + juce::String(landRms, 4) + " preRms=" + juce::String(preRms, 4));
+
+        proc.setMacroMix(0.25f); proc.setLiveMode(false);
+    }
+
     std::printf("\nRESULT: %d passed, %d failed -> %s\n", g_pass, g_fail,
                 g_fail == 0 ? "ALL RENDER CHECKS PASS" : "FAILURES ABOVE");
     tmp.deleteRecursively();

@@ -106,6 +106,7 @@ private:
     juce::Slider       liveWetKnob;                 // Wet Amount (horizontal)
     juce::Label        liveWetLabel { {}, "Wet" };
     juce::Label        liveStatusLabel;             // mode + reported latency
+    juce::TextButton   livePreviewButton { "Preview Live" };  // offline-render the live preverb + audition
     juce::ComboBox     liveTimeBox;                 // TIME: 1/32 .. 4 bars
     juce::ComboBox     liveFeelBox;                 // FEEL: Straight / Dotted / Triplet
     juce::Label        liveTimeLabel { {}, "TIME" };
