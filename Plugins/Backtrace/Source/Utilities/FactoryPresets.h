@@ -50,9 +50,32 @@ namespace btpreset
         o->setProperty("pitch", pitch);
         o->setProperty("land", land);
         o->setProperty("routing", routing);
+        o->setProperty("liveMode", false);   // offline presets are Capture mode — so switching off a
+                                             // Live preset reliably leaves Live mode (buildLive re-sets true)
         o->setProperty("delay",  buildDelay(dFl, dOv));
         o->setProperty("reverb", buildReverb(rFl, rOv));
         return juce::var(o);
+    }
+
+    // LIVE PREVERB preset: a normal state (reverb flavor + neutral routing) with the live-preverb
+    // keys added, so loading it enables real-time Mode 2 with a tuned Time/Feel/Shape/Mix. Additive
+    // only — never touches the live DSP path. timeIdx 0..7 = 1/32,1/16,1/8,1/4,1/2,1bar,2bar,4bar;
+    // feel 0/1/2 = Straight/Dotted/Triplet; shape 0.5 = default (lower gentler, higher a late bloom).
+    inline juce::var buildLive(int rFl, Ov rOv, int timeIdx, int feel, float shape,
+                               float mix, float pitch, float wet = 1.0f)
+    {
+        juce::var st = buildState(0, {}, rFl, rOv, "reverb_swell", pitch, false);
+        if (auto* o = st.getDynamicObject())
+        {
+            o->setProperty("liveMode",  true);
+            o->setProperty("liveTime",  timeIdx);
+            o->setProperty("liveFeel",  feel);
+            o->setProperty("liveShape", (double) shape);
+            o->setProperty("liveMix",   (double) mix);
+            o->setProperty("liveWet",   (double) wet);
+            o->setProperty("liveDry",   1.0);
+        }
+        return st;
     }
 
     // Neutral INIT state — pitch 0, no extreme FX. Used for fresh insert + Reset
@@ -78,6 +101,21 @@ namespace btpreset
         // MUST stay first — the plugin opens on preset 0 on a fresh insert, so this
         // neutral pitch-0 state is what every new instance starts from.
         add("INIT - Clean Backtrace", "Utility / Init", initState());
+
+        // ============================== Live Preverb ==============================
+        // Real-time Mode 2 starting points. Loading one enables LIVE PREVERB with a tuned
+        // Time/Feel/Shape/Mix (+ reverb tone). Engage while the transport is STOPPED, then play.
+        // buildLive(reverbFl, reverbOv, timeIdx, feel, shape, mix, pitch[, wet]).
+        add("Vocal Lift",        "Live Preverb", buildLive(3, {},                 3, 0, 0.50f, 0.40f,  0.0f));
+        add("Guitar Swell",      "Live Preverb", buildLive(1, {},                 3, 0, 0.50f, 0.40f,  0.0f));
+        add("Snare Halo",        "Live Preverb", buildLive(4, {{"tone",0.66f}},   2, 0, 0.40f, 0.30f,  0.0f));
+        add("808 Sub Bloom",     "Live Preverb", buildLive(1, {{"tone",0.34f}},   4, 0, 0.56f, 0.35f,  0.0f));
+        add("Big Riser",         "Live Preverb", buildLive(3, {},                 5, 0, 0.82f, 0.50f, 12.0f));
+        add("Tight Transition",  "Live Preverb", buildLive(2, {},                 2, 0, 0.50f, 0.35f,  0.0f));
+        add("Cathedral Rise",    "Live Preverb", buildLive(1, {{"tone",0.42f}},   6, 0, 0.70f, 0.45f,  0.0f));
+        add("Dotted Pulse",      "Live Preverb", buildLive(3, {},                 2, 1, 0.50f, 0.35f,  0.0f));
+        add("Micro Shimmer",     "Live Preverb", buildLive(3, {},                 1, 0, 0.42f, 0.30f,  0.0f));
+        add("Plate Vocal Air",   "Live Preverb", buildLive(4, {{"tone",0.72f}},   3, 0, 0.50f, 0.35f,  0.0f));
 
         // ============================== Vocal Throws ==============================
         add("Ghost Vocal Rise", "Vocal Throws",

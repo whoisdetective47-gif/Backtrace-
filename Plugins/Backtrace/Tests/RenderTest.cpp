@@ -7,6 +7,7 @@
 #include "PluginProcessor.h"
 #include "DSP/DelayMachine.h"
 #include "DSP/ReverbSpace.h"
+#include "Utilities/FactoryPresets.h"
 #include <cstdio>
 #include <cmath>
 
@@ -759,6 +760,37 @@ int main()
         check("live kernel peak consistent across flavors (<1.8x spread)", hi / juce::jmax(1.0e-6f, lo) < 1.8f,
               "hi/lo=" + juce::String(hi / juce::jmax(1.0e-6f, lo), 2));
         proc.setReverbFlavor(1);
+    }
+
+    std::printf("14. Live Preverb presets (additive bank, live params restore):\n");
+    {
+        int liveCount = 0; bool loadedGuitar = false, allEnableLive = true;
+        for (auto& f : btpreset::all())
+        {
+            if (f.category != juce::String("Live Preverb")) continue;
+            ++liveCount;
+            proc.setStateVar(f.state);
+            if (! proc.getLiveMode()) allEnableLive = false;   // every Live preset must enable Mode 2
+            if (f.name == juce::String("Guitar Swell"))
+            {
+                loadedGuitar = true;
+                check("'Guitar Swell' enables live mode",   proc.getLiveMode(), "");
+                check("'Guitar Swell' Time = 1/4 (idx 3)",  proc.getLiveTimeIndex() == 3,
+                      "idx=" + juce::String(proc.getLiveTimeIndex()));
+                check("'Guitar Swell' Shape ~ 0.50",        std::abs(proc.getLiveShape() - 0.50f) < 0.02f,
+                      "shape=" + juce::String(proc.getLiveShape(), 2));
+                check("'Guitar Swell' Mix ~ 0.40",          std::abs(proc.getMacroMix() - 0.40f) < 0.02f,
+                      "mix=" + juce::String(proc.getMacroMix(), 2));
+            }
+        }
+        check("Live Preverb preset bank present (>= 8)", liveCount >= 8, "count=" + juce::String(liveCount));
+        check("every Live preset enables live mode",     allEnableLive, "");
+        check("'Guitar Swell' preset found",             loadedGuitar, "");
+
+        // INIT / offline presets must NOT enable live mode (additive only, no regression)
+        proc.setStateVar(btpreset::initState());
+        check("INIT preset stays in Capture mode (live off)", ! proc.getLiveMode(), "");
+        proc.setLiveMode(false);
     }
 
     std::printf("\nRESULT: %d passed, %d failed -> %s\n", g_pass, g_fail,
