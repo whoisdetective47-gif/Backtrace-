@@ -1188,79 +1188,59 @@ void BacktraceProcessor::rebuildLiveIR()
     const std::lock_guard<std::mutex> lk(liveIRMutex);   // never let two rebuilds touch the reverb objects at once
 
     juce::ScopedNoDenormals noDenormals;
-    const int M  = preverbLengthSamples();
-    const int ch = 2;
+    const int    M    = preverbLengthSamples();
+    const int    ch   = 2;
+    const double mSec = (double) M / juce::jmax(1.0, currentSR);
+    const float  micro = juce::jlimit(0.0f, 1.0f, (0.30f - (float) mSec) / 0.30f);
+
     juce::AudioBuffer<float> ir(ch, M);
     ir.clear();
-    ir.setSample(0, 0, 1.0f);                              // unit impulse → its reverb tail = the kernel
-    ir.setSample(1, 0, 1.0f);
 
-    const double mSec  = (double) M / juce::jmax(1.0, currentSR);
-    // MICRO factor: 1 at very short windows (1/16, 1/32), 0 by ~300 ms. Short windows have no
-    // room for pre-delay + a long decay, so we scale the reverb TO the window — otherwise the
-    // IR is mostly pre-delay silence + fade and the preverb goes dry/silent ("stops reversing").
-    const float micro  = juce::jlimit(0.0f, 1.0f, (0.30f - (float) mSec) / 0.30f);
-    if (reverbFlavor.load() != 0)
+    // ---- SMOOTH synthetic diffuse preverb kernel ----------------------------------------
+    // A reverse reverb's tail is DENSE DIFFUSE energy. Instead of reversing a resonant /
+    // shimmering algorithmic reverb (which rings + octave-pitch-shifts → harsh, metallic,
+    // "8-bit", and RESONATES so it blasts on tonal sources), synthesise the tail directly:
+    // decorrelated VELVET NOISE (dense random ± impulses = a smooth diffuse wash, no modal
+    // resonance, no shimmer) shaped by a build-up envelope and coloured by a tone filter. A
+    // non-resonant kernel is smooth AND can't blast. The Reverb TYPE + Tone knob just set the
+    // colour (dark ↔ bright); Octave tilts brightness (a diffuse wash has no pitch to shift).
+    const int   fl       = reverbFlavor.load();
+    const float toneKnob = reverbParam[3].load();                          // per-flavor Tone 0..1
+    const float oct      = pitchSemitones.load() / 12.0f;                  // octave → brightness tilt
+    const float baseLp   = fl == 1 ? 5200.0f : fl == 2 ? 7000.0f : fl == 3 ? 9500.0f
+                         : fl == 4 ? 8000.0f : fl == 5 ? 4200.0f : 6500.0f;
+    const float lpHz     = juce::jlimit(1000.0f, 15000.0f,
+                                        baseLp * (0.55f + toneKnob * 0.7f) * std::pow(2.0f, oct * 0.6f));
+    const float hpHz     = 130.0f;
+    const float riseExp  = 2.0f + micro * 1.6f;                            // quiet start → bloom; punchier for micro
+    const int   spacing  = juce::jmax(1, (int) (currentSR / 2600.0));      // ~2600 velvet impulses/sec = dense/smooth
+
+    const float aHp = (float) std::exp(-2.0 * juce::MathConstants<double>::pi * hpHz / juce::jmax(1.0, currentSR));
+    const float aLp = 1.0f - (float) std::exp(-2.0 * juce::MathConstants<double>::pi * lpHz / juce::jmax(1.0, currentSR));
+    for (int c = 0; c < ch; ++c)
     {
-        const float decayOv  = juce::jlimit(0.18f, 0.55f, 0.18f + (float) mSec * 0.05f);   // controlled, no resonant ring
-        const float preScale = juce::jlimit(0.05f, 1.0f, (float) mSec / 0.50f);            // shrink pre-delay for short windows
-        const float density  = 0.08f + micro * 0.45f;                                       // denser → smooth short smear
-        const float shim     = juce::jlimit(0.0f, 1.0f, 0.25f * (1.0f - micro * 0.5f));     // octave handled by IR pitch-shift below
-        applyReverb(ir, M, /*wetOnly*/ true, mSec, decayOv, density, shim, preScale);
-    }
-
-    for (int c = 0; c < ch; ++c)                           // reverse → preverb (quiet build-up → loud landing)
-        std::reverse(ir.getWritePointer(c), ir.getWritePointer(c) + M);
-
-    // OCTAVE / Pitch — resample the reversed kernel to shift its pitch (a genuinely higher /
-    // lower preverb), keeping the LANDING aligned at the end (M). Cheap (one resample), and
-    // only when nonzero. Works at every Swell Time (subtler at micro, but audible — never
-    // "active yet doing nothing"). This is what makes octave respond in Live mode.
-    {
-        const float semis = pitchSemitones.load();
-        if (std::abs(semis) > 0.01f)
+        juce::Random rng ((juce::int64) 0x9E3779B1LL * (c + 1) ^ (juce::int64) fl * 2654435761LL ^ (juce::int64) M);
+        float* d = ir.getWritePointer(c);
+        for (int g = 0; g < M; g += spacing)               // velvet noise — decorrelated per channel = width
         {
-            const double ratio  = std::pow(2.0, (double) semis / 12.0);          // >1 = up
-            const int    newLen = juce::jlimit(8, M * 4, (int) (M / ratio));
-            juce::AudioBuffer<float> shifted(ch, M); shifted.clear();
-            for (int c = 0; c < ch; ++c)
-            {
-                std::vector<float> tmp((size_t) newLen);
-                juce::LagrangeInterpolator interp;
-                interp.process(ratio, ir.getReadPointer(c), tmp.data(), newLen);  // resample = pitch shift
-                const int copy = juce::jmin(newLen, M);
-                float* d = shifted.getWritePointer(c);
-                for (int i = 0; i < copy; ++i) d[M - copy + i] = tmp[(size_t) (newLen - copy + i)];   // land-aligned
-            }
-            ir.makeCopyOf(shifted);
+            const int pos = g + rng.nextInt(spacing);
+            if (pos < M) d[pos] = rng.nextBool() ? 1.0f : -1.0f;
+        }
+        float hpZ = 0.0f, lpZ = 0.0f;                       // colour: HPF de-mud + LPF warm → smooth diffuse wash
+        for (int i = 0; i < M; ++i)
+        {
+            float x = d[i];
+            hpZ = aHp * hpZ + (1.0f - aHp) * x; x = x - hpZ;
+            lpZ += aLp * (x - lpZ);             x = lpZ;
+            const float t = (M > 1) ? (float) i / (float) (M - 1) : 1.0f;  // 0 far-tail → 1 landing
+            d[i] = x * std::pow(t, riseExp);                               // build-up envelope
         }
     }
 
-    // Tone-shape the kernel: HPF (~150 Hz, de-mud) + gentle LPF (~8 kHz, de-harsh) so the
-    // swell is smooth and expensive, not brittle/digital.
-    {
-        const float aHp = (float) std::exp(-2.0 * juce::MathConstants<double>::pi * 150.0 / juce::jmax(1.0, currentSR));
-        const float aLp = 1.0f - (float) std::exp(-2.0 * juce::MathConstants<double>::pi * 8000.0 / juce::jmax(1.0, currentSR));
-        for (int c = 0; c < ch; ++c)
-        {
-            float* d = ir.getWritePointer(c);
-            float hpZ = 0.0f, lpZ = 0.0f;
-            for (int i = 0; i < M; ++i)
-            {
-                const float x  = d[i];
-                hpZ = aHp * hpZ + (1.0f - aHp) * x;        // low component
-                const float hp = x - hpZ;                  // high-passed (de-mud)
-                lpZ += aLp * (hp - lpZ);                   // low-passed (de-harsh)
-                d[i] = lpZ;
-            }
-        }
-    }
-
-    // Smooth envelope PROPORTIONAL to the window: a soft (squared) fade-in on the quiet
-    // build-up + a short landing taper. Scaling with M means short modes still leave most of
-    // the window as usable reverse tail (a fixed 30 ms fade would swallow a 1/16 window).
-    const int fin  = juce::jlimit(8, (int) (currentSR * 0.030), M / 8);
-    const int fout = juce::jlimit(4, (int) (currentSR * 0.008), M / 12);
+    // Smooth envelope edges: soft (squared) fade-in on the quiet start + short landing taper,
+    // proportional so short windows still develop (a fixed fade would swallow a 1/16 window).
+    const int fin  = juce::jlimit(8, (int) (currentSR * 0.020), M / 8);
+    const int fout = juce::jlimit(4, (int) (currentSR * 0.006), M / 14);
     for (int c = 0; c < ch; ++c)
     {
         float* d = ir.getWritePointer(c);

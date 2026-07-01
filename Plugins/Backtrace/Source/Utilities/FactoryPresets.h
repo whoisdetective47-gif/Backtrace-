@@ -63,7 +63,7 @@ namespace btpreset
         // Reverb Swell = the classic producer move (reverb tail → reverse), so a fresh
         // insert nails the main Backtrace product out of the box. Default reverb = Ghost
         // Shimmer (flavor 3). Fade/Ringout/Motion defaults live in the processor atomics.
-        return buildState(0, {}, 3, { {"mix", 0.30f} }, "reverb_swell", 0.0f, false);
+        return buildState(0, {}, 1, { {"mix", 0.30f} }, "reverb_swell", 0.0f, false);   // Velvet Hall (warm/smooth)
     }
 
     struct FactoryDef { juce::String name, category; juce::var state; };
