@@ -3,6 +3,7 @@
 #include "PluginProcessor.h"
 #include "UI/WaveformCanvas.h"
 #include "UI/SwellCanvas.h"
+#include "UI/LiveScope.h"
 #include "UI/DragOutZone.h"
 #include "UI/SlotButton.h"
 #include "UI/KnobLNF.h"
@@ -161,6 +162,7 @@ private:
     juce::Label       statusLabel;
     juce::Label       selectionLabel;
     WaveformCanvas    waveform;
+    LiveScope         liveScope;         // real-time output scope, overlays the source lane in Live mode
 
     // Printed-swell editor lane + final filter (this fix pass)
     juce::Label       sourceCaption  { {}, "1  SOURCE   (DRAG AUDIO IN)" };

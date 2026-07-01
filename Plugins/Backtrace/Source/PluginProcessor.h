@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include <mutex>
+#include <array>
 #include "Vault/CaptureEngine.h"
 #include "Audio/SyncCapture.h"
 #include "Audio/ReverseEngine.h"
@@ -308,6 +309,16 @@ public:
     // sound is audible in the standalone (whose input is muted) for fast A/B tuning.
     void  startLivePreview();
 
+    // LIVE SCOPE — copy the decimated output peaks oldest→newest into dest[scopeSize()]. The
+    // editor draws this on its timer for the real-time waveform view (read-only, engine untouched).
+    static constexpr int scopeSize() { return kScopeSize; }
+    void  getScopePeaks(float* dest) const
+    {
+        const int wp = scopeWritePos.load(std::memory_order_relaxed);
+        for (int i = 0; i < kScopeSize; ++i)
+            dest[i] = scopeBuf[(size_t) ((wp + i) % kScopeSize)].load(std::memory_order_relaxed);
+    }
+
     // ---- Printed-swell editor stage (post-render trim / fades / filter) ----
     // The render (stage 1) fills swellBuffer; trim+fades+filter (stage 2) shape it
     // identically for audition / print / export / drag.
@@ -554,6 +565,15 @@ private:
     std::atomic<bool>  dspPrepared { false };     // true only after prepareToPlay — gates worker DSP use
     std::atomic<bool>  livePreviewRendering { false };  // offline preview render in progress → audio thread skips livePreverb
     std::mutex         liveIRMutex;               // serialises live-IR rebuilds (worker vs any direct call)
+
+    // LIVE SCOPE — a decimated peak stream of the OUTPUT for the editor's real-time view. Purely a
+    // READ-ONLY tap (never affects the signal). Lock-free: relaxed atomics, benign scope tearing OK.
+    static constexpr int kScopeSize  = 512;       // decimated samples the scope draws (≈ pixels)
+    static constexpr int kScopeDecim = 512;       // audio samples per scope sample → ~5.5 s window
+    std::array<std::atomic<float>, (size_t) kScopeSize> scopeBuf {};
+    std::atomic<int>   scopeWritePos { 0 };
+    int    scopeAccumCount = 0;                    // audio-thread only
+    float  scopeAccumPeak  = 0.0f;                 // audio-thread only
 
     std::vector<PresetEntry> presets;
     int  currentPreset = 0;

@@ -209,6 +209,25 @@ void BacktraceProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
         for (int ch = 0; ch < numCh; ++ch)
             buffer.getWritePointer(ch)[i] *= g;
     }
+
+    // LIVE SCOPE tap — decimated peak stream of the FINAL output for the editor's real-time view.
+    // Read-only: never writes back to the signal. Lock-free (relaxed atomics); a little tearing on
+    // the display is harmless.
+    {
+        const float* o0 = buffer.getReadPointer(0);
+        const float* o1 = numCh > 1 ? buffer.getReadPointer(1) : o0;
+        for (int i = 0; i < numSmp; ++i)
+        {
+            scopeAccumPeak = juce::jmax(scopeAccumPeak, juce::jmax(std::abs(o0[i]), std::abs(o1[i])));
+            if (++scopeAccumCount >= kScopeDecim)
+            {
+                const int wp = scopeWritePos.load(std::memory_order_relaxed);
+                scopeBuf[(size_t) wp].store(scopeAccumPeak, std::memory_order_relaxed);
+                scopeWritePos.store((wp + 1) % kScopeSize, std::memory_order_relaxed);
+                scopeAccumPeak = 0.0f; scopeAccumCount = 0;
+            }
+        }
+    }
 }
 
 // ===========================================================================

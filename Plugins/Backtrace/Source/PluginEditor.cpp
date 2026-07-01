@@ -21,6 +21,11 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     : juce::AudioProcessorEditor(p), proc(p)
 {
     addAndMakeVisible(waveform);
+    // LIVE SCOPE — hidden until LIVE PREVERB is on, then it overlays the (unused) source lane with a
+    // real-time output waveform. Read-only fetch from the processor's scope tap; nothing feeds back.
+    liveScope.size  = proc.scopeSize();
+    liveScope.fetch = [this](float* d) { proc.getScopePeaks(d); };
+    addChildComponent(liveScope);
     waveform.onLocatorsChanged = [this](int a, int b) { updateSelection(a, b); };
     waveform.onTailStartChanged = [this](int offset)            // Source End / Tail Start moved
     {
@@ -1529,6 +1534,11 @@ void BacktraceEditor::timerCallback()
     transportLabel.setText(transportText(), juce::dontSendNotification);
     locatorLabel.setText(locatorText(), juce::dontSendNotification);
 
+    // Live scope: show it over the (unused) source lane in Live mode and animate at the timer rate.
+    const bool liveOn = proc.getLiveMode();
+    if (liveScope.isVisible() != liveOn) liveScope.setVisible(liveOn);
+    if (liveOn) liveScope.repaint();
+
     // Live Preverb: push any latency change to the host (message thread) + status readout.
     proc.pushLiveLatencyIfChanged();
     const bool live = proc.getLiveMode();
@@ -1779,6 +1789,7 @@ void BacktraceEditor::resized()
         auto a = juce::Rectangle<int>(226, 80, 458, 560).reduced(8);
         sourceCaption.setBounds(a.removeFromTop(14));
         waveform.setBounds(a.removeFromTop(130));
+        liveScope.setBounds(waveform.getBounds());   // overlay the source lane (shown only in Live mode)
         {
             auto row = a.removeFromTop(22);
             playSourceButton.setBounds(row.removeFromLeft(96)); row.removeFromLeft(8);
