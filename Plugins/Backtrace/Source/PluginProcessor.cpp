@@ -1291,6 +1291,26 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
         for (int i = 0; i < fout; ++i) d[M - 1 - i] *= (float) i / (float) fout;
     }
 
+    // CREST CONTROL (loudness-match across reverb flavors): a dense reverb reverses into a
+    // PEAKY kernel (loud landing, thin body); a diffuse one spreads. Since we L2-normalise
+    // energy, a peaky kernel ends up with a quiet body → it reads much quieter than a spread
+    // one at the same energy. Soft-limit the peaks (above ~18× the kernel RMS) so the energy
+    // lives in the body, then normalise → every flavor lands at a consistent PERCEIVED level.
+    {
+        double eSum = 0.0;
+        for (int c = 0; c < ch; ++c)
+        { const float* d = ir.getReadPointer(c); for (int i = 0; i < M; ++i) eSum += (double) d[i] * (double) d[i]; }
+        const float rms = (float) std::sqrt(eSum / juce::jmax(1, ch * M));
+        const float thr = rms * 18.0f;                            // peak ceiling relative to body
+        if (thr > 1.0e-9f)
+            for (int c = 0; c < ch; ++c)
+            {
+                float* d = ir.getWritePointer(c);
+                for (int i = 0; i < M; ++i)
+                    d[i] = thr * std::tanh(d[i] / thr);           // smooth saturation: body ≈ linear, peaks capped
+            }
+    }
+
     // GAIN: L2 (energy) normalise → a CONSISTENT, usable wet level (≈ input level for
     // broadband material), instead of peak-normalising (which let sustained material sum up
     // to a blast) or L1-normalising (which collapsed the level to near-silence). The output

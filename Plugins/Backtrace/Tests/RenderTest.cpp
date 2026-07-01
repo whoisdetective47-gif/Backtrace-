@@ -717,6 +717,50 @@ int main()
         proc.setLiveShape(0.5f);
     }
 
+    std::printf("13. Live kernel loudness across reverb flavors (peak/presence):\n");
+    {
+        proc.setLiveTimeIndex(3); proc.setLiveFeel(0); proc.setLiveShape(0.5f); proc.setPitchSemitones(0.0f);
+        proc.prepareToPlay(SR, 512);
+        const int M = proc.preverbLengthSamples();
+        auto kpeak = [&](int fl)
+        {
+            proc.setReverbFlavor(fl);
+            juce::AudioBuffer<float> k(2, M); proc.buildLiveKernel(k);
+            return juce::jmax(k.getMagnitude(0, 0, M), k.getMagnitude(1, 0, M));
+        };
+        // crest (peak/rms) → how concentrated vs spread; hf (>2kHz share) → brightness/presence.
+        auto stats = [&](int fl, float& crest, float& hf)
+        {
+            proc.setReverbFlavor(fl);
+            juce::AudioBuffer<float> k(2, M); proc.buildLiveKernel(k);
+            const float* d = k.getReadPointer(0);
+            double eTot = 0.0, eHf = 0.0; float hp = 0.0f;
+            const float a = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * 2000.0f / (float) SR);
+            float pk = 0.0f;
+            for (int i = 0; i < M; ++i) { const float x = d[i]; hp += a * (x - hp); const float h = x - hp;
+                eTot += (double) x * x; eHf += (double) h * h; pk = juce::jmax(pk, std::abs(x)); }
+            const float rms = (float) std::sqrt(eTot / juce::jmax(1, M));
+            crest = pk / juce::jmax(1.0e-6f, rms);
+            hf = (float) (eHf / juce::jmax(1.0e-9, eTot));
+        };
+        const float pHall  = kpeak(1);
+        const float pModern= kpeak(2);
+        const float pShim  = kpeak(3);
+        const float pPlate = kpeak(4);
+        const float pSpring= kpeak(5);
+        float cHall, hHall, cShim, hShim;
+        stats(1, cHall, hHall); stats(3, cShim, hShim);
+        std::printf("     kernel peak: Hall=%.4f Modern=%.4f Shimmer=%.4f Plate=%.4f Spring=%.4f\n",
+                    pHall, pModern, pShim, pPlate, pSpring);
+        std::printf("     Hall   crest=%.1f  hf(>2k)=%.3f\n", cHall, hHall);
+        std::printf("     Shimmer crest=%.1f  hf(>2k)=%.3f\n", cShim, hShim);
+        const float hi = juce::jmax(juce::jmax(pHall, pModern), juce::jmax(juce::jmax(pShim, pPlate), pSpring));
+        const float lo = juce::jmin(juce::jmin(pHall, pModern), juce::jmin(juce::jmin(pShim, pPlate), pSpring));
+        check("live kernel peak consistent across flavors (<1.8x spread)", hi / juce::jmax(1.0e-6f, lo) < 1.8f,
+              "hi/lo=" + juce::String(hi / juce::jmax(1.0e-6f, lo), 2));
+        proc.setReverbFlavor(1);
+    }
+
     std::printf("\nRESULT: %d passed, %d failed -> %s\n", g_pass, g_fail,
                 g_fail == 0 ? "ALL RENDER CHECKS PASS" : "FAILURES ABOVE");
     tmp.deleteRecursively();

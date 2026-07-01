@@ -94,7 +94,7 @@ public:
         modDepth = mod * (float) (sampleRate * 0.0020);
         modScale = 0.6f + mod * 1.4f;                                        // ~0.05–1.2 Hz range
         erScale  = scale;
-        injLevel = 0.28f;
+        injLevel = 0.18f;   // softer FDN drive → the tail builds gradually (spread), not a front spike
     }
 
     void process(float inL, float inR, float& outL, float& outR) override
@@ -116,7 +116,7 @@ public:
         float early = 0.0f;
         for (int i = 0; i < 4; ++i)
             early += readPre(preSamp + erMs[i] * erScale * 0.001f * (float) sampleRate) * erG[i];
-        early *= 0.28f;
+        early *= 0.12f;   // gentle ER: a strong onset reverses into a spiky landing (high crest, thin body)
 
         // deep input diffusion → silky wash before the tank
         float d = preOut;
