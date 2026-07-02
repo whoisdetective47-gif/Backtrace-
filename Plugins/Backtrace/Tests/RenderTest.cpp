@@ -977,6 +977,76 @@ int main()
         proc.setOutLpf(20000.0f);
     }
 
+    std::printf("19. Live REAL pitch (wet-feed transpose) + seamless kernel swap:\n");
+    {
+        setReverb(proc, 1); proc.setDelayFlavor(0); proc.setDelayBlend(0.0f);
+        proc.setLiveTimeIndex(3); proc.setLiveFeel(0); proc.setLiveShape(0.5f);
+        proc.setMacroMix(1.0f); proc.setLiveWet(1.0f); proc.setLiveDry(0.0f);   // wet only
+        proc.setLiveMode(true);
+        proc.prepareToPlay(SR, 512);
+        proc.rebuildLiveIR();
+        { int w = 0; while (! proc.liveConvLoaded() && w < 4000) { juce::Thread::sleep(20); w += 20; } }
+
+        // Estimate the wet output's dominant frequency via zero crossings for a 220 Hz sine.
+        auto domFreq = [&](float semis)
+        {
+            proc.setPitchSemitones(semis);
+            juce::Thread::sleep(250);                        // let the worker settle any rebuild
+            juce::AudioBuffer<float> blk(2, 512); juce::MidiBuffer mi;
+            double phase = 0.0; const double w0 = juce::MathConstants<double>::twoPi * 220.0 / SR;
+            int zc = 0, cnt = 0; float prev = 0.0f;
+            for (int k = 0; k < 400; ++k)                    // ~4.3 s: fill the preverb + settle
+            {
+                for (int i = 0; i < 512; ++i)
+                { const float s = 0.4f * (float) std::sin(phase); phase += w0;
+                  blk.setSample(0, i, s); blk.setSample(1, i, s); }
+                juce::AudioBuffer<float> sub(blk.getArrayOfWritePointers(), 2, 512);
+                proc.processBlock(sub, mi);
+                if (k > 250)                                  // steady state only
+                    for (int i = 0; i < 512; ++i)
+                    { const float v = sub.getSample(0, i);
+                      if (prev <= 0.0f && v > 0.0f) ++zc;
+                      prev = v; ++cnt; }
+            }
+            return (double) zc * SR / juce::jmax(1, cnt);    // positive-going crossings = Hz
+        };
+        const double f0 = domFreq(0.0f);
+        const double f12 = domFreq(12.0f);
+        check("live pitch 0 st: wet tracks the input (~220 Hz)", std::abs(f0 - 220.0) < 25.0,
+              "f=" + juce::String(f0, 1) + " Hz");
+        check("live pitch +12 st: wet is a REAL octave up (~440 Hz)",
+              std::abs(f12 - 440.0) < 80.0 && f12 > f0 * 1.7,
+              "f=" + juce::String(f12, 1) + " Hz (unity was " + juce::String(f0, 1) + ")");
+        proc.setPitchSemitones(0.0f);
+
+        // Seamless kernel swap: steady noise, rebuild the (same-length) kernel mid-stream, keep
+        // processing through the crossfade — output must never drop out.
+        proc.setMacroMix(1.0f); proc.setLiveWet(1.0f); proc.setLiveDry(0.0f);
+        juce::Thread::sleep(250);
+        juce::Random rng(23); juce::AudioBuffer<float> nb(2, 512); juce::MidiBuffer mi2;
+        double minRms = 1.0e9; int measured = 0;
+        for (int k = 0; k < 300; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float s = (rng.nextFloat() * 2.0f - 1.0f) * 0.4f;
+                nb.setSample(0, i, s); nb.setSample(1, i, s); }
+            juce::AudioBuffer<float> ns(nb.getArrayOfWritePointers(), 2, 512);
+            proc.processBlock(ns, mi2);
+            if (k == 150) { proc.setReverbParam(1, 0.5f); proc.rebuildLiveIR(); }   // knob change mid-stream
+            if (k >= 150) juce::Thread::sleep(2);   // ~real-time pacing: the async kernel load must
+                                                    // land in wall-clock time, as it does in a DAW
+            if (k > 120)
+            {
+                double s2 = 0.0; for (int i = 0; i < 512; ++i) { const double v = ns.getSample(0, i); s2 += v * v; }
+                minRms = juce::jmin(minRms, std::sqrt(s2 / 512.0)); ++measured;
+            }
+        }
+        check("kernel swap mid-stream: no dropout (min block RMS holds)", minRms > 0.01 && measured > 0,
+              "minRms=" + juce::String(minRms, 4));
+
+        proc.setLiveMode(false); proc.setMacroMix(0.25f); proc.setLiveDry(1.0f);
+        setReverb(proc, 1);
+    }
+
     std::printf("\nRESULT: %d passed, %d failed -> %s\n", g_pass, g_fail,
                 g_fail == 0 ? "ALL RENDER CHECKS PASS" : "FAILURES ABOVE");
     tmp.deleteRecursively();

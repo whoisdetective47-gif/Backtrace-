@@ -69,3 +69,23 @@ target_link_libraries(ClockerLogicTest PRIVATE
     juce::juce_audio_utils
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
+
+# ---------------------------------------------------------------------------
+# GUI probe (console) — builds the real editor and diagnoses text-input issues
+# (hit-testing, focus, simulated keypresses) without needing a DAW.
+# ---------------------------------------------------------------------------
+juce_add_console_app(ClockerGuiProbe PRODUCT_NAME "ClockerGuiProbe")
+juce_generate_juce_header(ClockerGuiProbe)
+target_sources(ClockerGuiProbe PRIVATE Tests/GuiProbe.cpp
+    Source/PluginProcessor.cpp Source/PluginEditor.cpp)
+target_include_directories(ClockerGuiProbe PRIVATE Source ../../Common)
+target_compile_definitions(ClockerGuiProbe PRIVATE
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+    JUCE_STANDALONE_APPLICATION=1
+    JUCE_MODAL_LOOPS_PERMITTED=1)
+target_link_libraries(ClockerGuiProbe PRIVATE
+    ClockerBinaryData
+    juce::juce_audio_processors
+    juce::juce_audio_utils
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)

@@ -323,12 +323,12 @@ public:
     // may never open in a session), or the host can't compensate and the swell lands wrong. It
     // equals LivePreverb's dry delay (convLatency + M-1), so report and internal delay agree.
     int   liveLatencyTarget() const
-    { return liveMode.load() ? (livePreverb.convLatency() + juce::jmax(0, preverbLengthSamples() - 1)) : 0; }
+    { return liveMode.load() ? (livePreverbs[0].convLatency() + juce::jmax(0, preverbLengthSamples() - 1)
+                                + livePitch.getLatencySamples()) : 0; }
     void  pushLiveLatencyIfChanged();       // message thread: setLatencySamples + updateHostDisplay
-    bool  liveReady() const     { return livePreverb.isReady(); }
-    bool  liveConvLoaded() const { return livePreverb.loadedIRSize() > 0; }   // convolution kernel finished loading
-    void  liveProcessBlock(juce::AudioBuffer<float>& b)
-    { const float mix = macroMix.load(); livePreverb.process(b, mix * liveWet.load(), (1.0f - mix) * liveDry.load()); }
+    bool  liveReady() const     { return liveActiveEngine().isReady(); }
+    bool  liveConvLoaded() const { return liveActiveEngine().loadedIRSize() > 0; }   // kernel finished loading
+    void  liveProcessBlock(juce::AudioBuffer<float>& b) { liveProcessInternal(b); }  // full live path (pitch + xfade)
     // Preview: apply the Live Preverb to the active source OFFLINE + play it — so Live-mode
     // sound is audible in the standalone (whose input is muted) for fast A/B tuning.
     void  startLivePreview();
@@ -578,7 +578,34 @@ private:
     SpringVerb         springVerb;
 
     // ---- Live Preverb (real-time reverse reverb) ----
-    LivePreverb        livePreverb;
+    // TWO live engines + crossfade: JUCE's Convolution HARD-swaps kernels (audible dropout on
+    // every knob-driven rebuild), so new kernels load into the STANDBY engine and the audio
+    // thread crossfades to it (~85 ms). Both engines run every block in live mode so the
+    // standby's dry line + conv tail stay warm. Length (TIME) changes hard-load both engines —
+    // the host re-syncs for the latency change anyway.
+    LivePreverb        livePreverbs[2];
+    LivePreverb&       liveActiveEngine()  { return livePreverbs[lpActive.load()]; }
+    const LivePreverb& liveActiveEngine() const { return livePreverbs[lpActive.load()]; }
+    std::atomic<int>   lpActive { 0 };
+    std::atomic<bool>  lpSwapPending { false };
+    std::atomic<int>   lpXfadePos { -1 };        // -1 = idle (audio thread writes; worker reads)
+    int                lpSettleRemaining = -1;   // audio-thread only: samples until the fade may start
+    static constexpr int kLpXfadeLen  = 4096;    // ~85 ms kernel crossfade
+    // JUCE's Convolution loads kernels ASYNC, hard-swaps at some later process() call (no "load
+    // finished" query), and CLEARS the convolution history on swap — the standby then needs a
+    // full KERNEL LENGTH of fresh input before its wet is back at level. So the settle before
+    // fading = kernel length + margin (dynamic), while the standby runs warm every block.
+    static constexpr int kLpSwapSettleMargin = 8192;
+    int  lpSwapSettleSamples() const { return juce::jmax(0, lastLiveKernelM.load()) + kLpSwapSettleMargin; }
+    std::atomic<int>   lastLiveKernelM { -1 };   // kernel length of the last load (worker writes)
+    juce::AudioBuffer<float> lpBufA, lpBufB, livePitchBuf;   // preallocated block scratch
+
+    // REAL live pitch: a dedicated real-time shifter on the WET FEED only (the swell is truly
+    // transposed like the offline path; the dry stays clean). Always in-line — its clean tap is
+    // transparent at 0 st — so the wet-path latency is CONSTANT (no PDC churn crossing zero).
+    ModernPitchShifter livePitch;
+    void liveProcessInternal(juce::AudioBuffer<float>& buffer);
+
     std::atomic<bool>  liveMode { false };       // Mode 2 = Live Preverb (else Capture/Print)
     std::atomic<float> liveWet { 1.0f };         // internal wet trim (the swell is hard-bounded in the IR)
     std::atomic<float> liveDry { 1.0f };         // Dry Amount (0 = Dry Mute)
@@ -642,7 +669,7 @@ private:
                 {   owner.regenerateSwell(); didRender = true; }
                 if (owner.liveIRRequested.exchange(false))     // Live Preverb kernel rebuild (same thread = no reverb-object race)
                 {
-                    juce::Thread::sleep(40);                    // debounce: coalesce knob-drag bursts into ONE rebuild
+                    juce::Thread::sleep(100);                   // debounce: coalesce knob-drag bursts into ONE rebuild
                     owner.liveIRRequested.store(false);        // take the latest settled params
                     owner.rebuildLiveIR();                     // off the audio thread, atomic kernel swap
                 }

@@ -57,6 +57,10 @@ public:
     bool isReady() const { return ready.load(); }
     int  loadedIRSize() const { return (int) conv.getCurrentIRSize(); }   // 0 until the kernel finishes loading
 
+    // Extra CONSTANT latency in the wet feed (e.g. a real-time pitch shifter ahead of the
+    // convolution). Added to the dry delay so wet and dry stay sample-aligned. Default 0.
+    void setExtraWetLatency(int n) { extraWetLatency = juce::jmax(0, n); }
+
     // Load a reversed reverb IR (the preverb kernel). Safe to call off the audio
     // thread — Convolution swaps the kernel atomically. irLen = pre-swell samples.
     void setIR(juce::AudioBuffer<float>&& reversedIR, double sr)
@@ -68,26 +72,32 @@ public:
                                  juce::dsp::Convolution::Trim::no,
                                  juce::dsp::Convolution::Normalise::no);
         // Dry must land on the swell PEAK (end of the reversed IR) + the convolution's
-        // own processing latency, so the swell builds in the samples before it.
-        const int d = juce::jlimit(0, dryDelay.getNumSamples() - 1, convLatency() + juce::jmax(0, irLen - 1));
+        // own processing latency (+ any constant wet-feed latency), so the swell builds
+        // in the samples before it.
+        const int d = juce::jlimit(0, dryDelay.getNumSamples() - 1,
+                                   convLatency() + juce::jmax(0, irLen - 1) + extraWetLatency);
         dryLatency.store(d);
         ready.store(true);
     }
 
-    // Real-time block: wet = reversed-IR convolution of the input; out = delayed dry
-    // (× dryGain) + wet (× wetGain), with a soft ceiling. Bypasses to delayed dry if
-    // the IR isn't loaded yet (so the audio path is always continuous — no hard-cut).
-    void process(juce::AudioBuffer<float>& buffer, float wetGain, float dryGain)
+    // Real-time block: wet = reversed-IR convolution of the WET FEED (wetSrc, defaults to the
+    // io buffer itself); out = delayed dry (× dryGain) + wet (× wetGain), with a soft ceiling.
+    // A separate wetSrc lets a pre-processed feed (e.g. pitched) drive the swell while the dry
+    // stays clean. Bypasses to delayed dry if the IR isn't loaded yet (always continuous).
+    void process(juce::AudioBuffer<float>& buffer, float wetGain, float dryGain,
+                 const juce::AudioBuffer<float>* wetSrc = nullptr)
     {
         const int n  = buffer.getNumSamples();
         const int ch = juce::jmin(channels, buffer.getNumChannels());
         if (n <= 0 || ch <= 0 || dryDelay.getNumSamples() <= 0) return;   // not prepared → leave audio untouched
 
+        const juce::AudioBuffer<float>& src = (wetSrc != nullptr && wetSrc->getNumSamples() >= n
+                                               && wetSrc->getNumChannels() >= ch) ? *wetSrc : buffer;
         const bool wet  = ready.load();
         const int  wetN = wet ? juce::jmin(n, maxBlock) : 0;   // conv + wetBuf sized for maxBlock — NEVER exceed
         if (wetN > 0)
         {
-            for (int c = 0; c < ch; ++c) wetBuf.copyFrom(c, 0, buffer, c, 0, wetN);
+            for (int c = 0; c < ch; ++c) wetBuf.copyFrom(c, 0, src, c, 0, wetN);
             juce::dsp::AudioBlock<float> block(wetBuf.getArrayOfWritePointers(), (size_t) ch, (size_t) wetN);
             juce::dsp::ProcessContextReplacing<float> ctx(block);
             conv.process(ctx);
@@ -133,7 +143,7 @@ private:
     juce::dsp::Convolution conv { juce::dsp::Convolution::NonUniform { kConvHead } };   // low-CPU partitioned conv
     juce::AudioBuffer<float> wetBuf, dryDelay;
     double sampleRate = 44100.0;
-    int    channels = 2, maxBlock = 512, dryWp = 0;
+    int    channels = 2, maxBlock = 512, dryWp = 0, extraWetLatency = 0;
     float  prevWet = 0.0f, prevDry = 1.0f;   // gain-ramp state (zipper-free Mix)
     std::atomic<int>  dryLatency { 0 };
     std::atomic<bool> ready { false };

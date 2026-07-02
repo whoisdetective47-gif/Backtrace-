@@ -114,7 +114,16 @@ void BacktraceProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     for (int c = 0; c < 2; ++c) { outHpState[c] = {}; outLpState[c] = {}; }   // output filter fresh
     outHpZ = outHpfHz.load(); outLpZ = outLpfHz.load();
 
-    livePreverb.prepare(sampleRate, samplesPerBlock, getTotalNumInputChannels());
+    livePitch.prepare(sampleRate, samplesPerBlock);            // constant-latency wet-feed shifter
+    for (auto& lp : livePreverbs)
+    {
+        lp.prepare(sampleRate, samplesPerBlock, getTotalNumInputChannels());
+        lp.setExtraWetLatency(livePitch.getLatencySamples());  // dry stays aligned with the pitched wet
+    }
+    lpActive.store(0); lpSwapPending.store(false); lpXfadePos.store(-1); lpSettleRemaining = -1; lastLiveKernelM.store(-1);
+    lpBufA.setSize(2, samplesPerBlock, false, false, true);
+    lpBufB.setSize(2, samplesPerBlock, false, false, true);
+    livePitchBuf.setSize(2, samplesPerBlock, false, false, true);
     dspPrepared.store(true);               // all DSP sized → the worker may now build the live IR
     if (liveMode.load()) requestLiveIR();  // build the preverb kernel only when Live mode is active
     {                                       // deterministic (not isReady-gated) → the host gets the
@@ -197,10 +206,7 @@ void BacktraceProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
     // Replaces passthrough with: delayed dry + reversed-IR convolution wet. The host
     // compensates the reported latency so the preverb lands in front of the source.
     if (liveMode.load() && ! playPlaying.load() && ! livePreviewRendering.load())
-    {
-        const float mix = macroMix.load();                 // global dry/wet blend
-        livePreverb.process(buffer, mix * liveWet.load(), (1.0f - mix) * liveDry.load());
-    }
+        liveProcessInternal(buffer);                       // pitch wet feed + dual-engine crossfade
 
     // Monitor gain. Passthrough otherwise (FX/pitch/routing arrive later).
     sOutput.setTargetValue(
@@ -1236,7 +1242,28 @@ void BacktraceProcessor::rebuildLiveIR()
     juce::AudioBuffer<float> ir(2, M);
     buildLiveKernel(ir);                                  // synth the reversed-reverb preverb kernel
 
-    livePreverb.setIR(std::move(ir), currentSR);
+    // Same length → load into the STANDBY engine and let the audio thread crossfade to it
+    // (seamless knob changes). Length change → hard-load BOTH engines (host re-syncs for the
+    // new latency anyway, and both engines must agree on the dry delay before the next fade).
+    // Never reload the fade TARGET mid-fade (that hard-swaps in the audible engine) — wait for
+    // the short fade to finish first (worker thread; bounded by kLpXfadeLen ≈ 85 ms).
+    for (int guard = 0; lpXfadePos.load() >= 0 && guard < 50; ++guard)
+        juce::Thread::sleep(5);
+    if (M == lastLiveKernelM.load() && dspPrepared.load())
+    {
+        lpSwapPending.store(false);                     // restart the settle window for THIS kernel
+        livePreverbs[1 - lpActive.load()].setIR(std::move(ir), currentSR);
+        lpSwapPending.store(true);
+    }
+    else
+    {
+        juce::AudioBuffer<float> irCopy;
+        irCopy.makeCopyOf(ir);
+        lpSwapPending.store(false);
+        livePreverbs[0].setIR(std::move(ir), currentSR);
+        livePreverbs[1].setIR(std::move(irCopy), currentSR);
+        lastLiveKernelM.store(M);
+    }
    #if JUCE_DEBUG
     DBG("[Backtrace liveIR] rebuilt: " << liveTimeLabel() << "  M=" << M
         << " (" << juce::String((double) M / juce::jmax(1.0, currentSR) * 1000.0, 0) << " ms)  reverb="
@@ -1331,9 +1358,8 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
     // The SHAPE control steepens/softens that build-up: 0.5 = the confirmed-good default rate,
     // lower = gentler/earlier energy, higher = a silent-then-dramatic late bloom.
     {
-        const float oct      = pitchSemitones.load() / 12.0f;
-        const float tone     = reverbParam[3].load();
-        const float lpHz     = juce::jlimit(3000.0f, 15000.0f, 8500.0f * (0.7f + tone * 0.6f) * std::pow(2.0f, oct * 0.5f));
+        const float tone     = reverbParam[3].load();   // pitch is now a REAL transpose of the wet feed
+        const float lpHz     = juce::jlimit(3000.0f, 15000.0f, 8500.0f * (0.7f + tone * 0.6f));
         const float baseRate = 2.6f + micro * 2.0f;                         // confirmed-good build-up (Shape 0.5)
         const float shapeDev = liveShape.load() - 0.5f;                     // -0.5 Gentle .. 0 default .. +0.5 Bloom
         // Asymmetric: Gentle side kept as-is (user liked it); Bloom side ~20% more urgent — a
@@ -1428,6 +1454,88 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
     if (l2 > 1.0e-6) ir.applyGain((float) ((double) kLiveIRGain / l2));
 }
 
+// The full real-time live path: pitch the WET FEED (real transpose of the swell — the dry stays
+// clean; the shifter's clean tap is transparent at 0 st so wet latency is constant), then run
+// BOTH preverb engines and crossfade to the standby when a fresh kernel finishes loading —
+// knob-driven kernel rebuilds become seamless instead of JUCE's hard swap (audible dropout).
+void BacktraceProcessor::liveProcessInternal(juce::AudioBuffer<float>& buffer)
+{
+    const int n   = buffer.getNumSamples();
+    const int nCh = juce::jmin(2, buffer.getNumChannels());
+    if (n <= 0 || nCh <= 0) return;
+    const float mix  = macroMix.load();
+    const float wetG = mix * liveWet.load();
+    const float dryG = (1.0f - mix) * liveDry.load();
+
+    // Wet feed = pitched copy of the input (shared ratio per sample → channels stay locked).
+    livePitch.setPitch(pitchSemitones.load());
+    const int pn = juce::jmin(n, livePitchBuf.getNumSamples());
+    {
+        float* p0 = livePitchBuf.getWritePointer(0);
+        float* p1 = nCh > 1 ? livePitchBuf.getWritePointer(1) : nullptr;
+        const float* i0 = buffer.getReadPointer(0);
+        const float* i1 = nCh > 1 ? buffer.getReadPointer(1) : i0;
+        for (int i = 0; i < pn; ++i)
+        {
+            const float ratio = livePitch.advanceAndGetRatio();
+            p0[i] = livePitch.processSample(0, i0[i], ratio);
+            if (p1 != nullptr) p1[i] = livePitch.processSample(1, i1[i], ratio);
+        }
+    }
+
+    const int act = lpActive.load();
+    if (lpSwapPending.load() && lpXfadePos.load() < 0)
+    {
+        // Settle first: the standby's async kernel load hard-swaps internally at some process()
+        // call AND clears the conv history — run it warm for a full kernel length (+ margin) so
+        // both the swap AND the history refill happen INAUDIBLY, then fade.
+        if (lpSettleRemaining < 0) lpSettleRemaining = lpSwapSettleSamples();
+        lpSettleRemaining -= n;
+        if (lpSettleRemaining <= 0) { lpXfadePos.store(0); lpSettleRemaining = -1; }
+    }
+    else if (! lpSwapPending.load())
+        lpSettleRemaining = -1;
+
+    if (lpXfadePos.load() >= 0)
+    {
+        for (int c = 0; c < nCh; ++c)
+        {
+            lpBufA.copyFrom(c, 0, buffer, c, 0, juce::jmin(n, lpBufA.getNumSamples()));
+            lpBufB.copyFrom(c, 0, buffer, c, 0, juce::jmin(n, lpBufB.getNumSamples()));
+        }
+        livePreverbs[act]    .process(lpBufA, wetG, dryG, &livePitchBuf);
+        livePreverbs[1 - act].process(lpBufB, wetG, dryG, &livePitchBuf);
+        const int xf0 = lpXfadePos.load();
+        for (int c = 0; c < nCh; ++c)
+        {
+            float* d = buffer.getWritePointer(c);
+            const float* a = lpBufA.getReadPointer(c);
+            const float* b = lpBufB.getReadPointer(c);
+            for (int i = 0; i < n; ++i)
+            {
+                const float x = juce::jlimit(0.0f, 1.0f, (float) (xf0 + i) / (float) kLpXfadeLen);
+                d[i] = a[i] * (1.0f - x) + b[i] * x;
+            }
+        }
+        if (xf0 + n >= kLpXfadeLen)
+        {
+            lpActive.store(1 - act);
+            lpSwapPending.store(false);
+            lpXfadePos.store(-1);
+        }
+        else
+            lpXfadePos.store(xf0 + n);
+    }
+    else
+    {
+        // Keep the standby warm (dry line + conv tail hot for the NEXT fade); its output is discarded.
+        for (int c = 0; c < nCh; ++c)
+            lpBufB.copyFrom(c, 0, buffer, c, 0, juce::jmin(n, lpBufB.getNumSamples()));
+        livePreverbs[1 - act].process(lpBufB, wetG, dryG, &livePitchBuf);
+        livePreverbs[act].process(buffer, wetG, dryG, &livePitchBuf);
+    }
+}
+
 // Message-thread: report the Live Preverb dry-delay to the host so PDC pulls the
 // preverb in front of the original sound. Deterministic from the pre-swell length (see
 // liveLatencyTarget) so it's correct even before the async kernel finishes loading.
@@ -1471,6 +1579,12 @@ void BacktraceProcessor::startLivePreview()
         buildLiveKernel(kernel);
     }
 
+    // Wet feed mirrors the live path: a REAL transpose of the source drives the swell
+    // (latency-compensated offline shifter); the dry stays clean.
+    juce::AudioBuffer<float> wetFeed(2, srcLen);
+    for (int c = 0; c < 2; ++c) wetFeed.copyFrom(c, 0, src, juce::jmin(c, sc - 1), in, srcLen);
+    applyPitch(wetFeed, srcLen, pitchSemitones.load());
+
     // FFT size for a wraparound-free LINEAR convolution: the smallest power of two ≥ srcLen+M-1.
     int order = 1; while ((1 << order) < srcLen + M) ++order;
     const int fftSize = 1 << order;
@@ -1491,7 +1605,7 @@ void BacktraceProcessor::startLivePreview()
 
         std::fill(a.begin(), a.end(), 0.0f);
         std::fill(b.begin(), b.end(), 0.0f);
-        for (int i = 0; i < srcLen; ++i) a[(size_t) i] = src.getSample(scn, in + i);
+        for (int i = 0; i < srcLen; ++i) a[(size_t) i] = wetFeed.getSample(juce::jmin(oc, wetFeed.getNumChannels() - 1), i);
         for (int i = 0; i < M;      ++i) b[(size_t) i] = kernel.getSample(kc, i);
 
         fft.performRealOnlyForwardTransform(a.data(), false);
