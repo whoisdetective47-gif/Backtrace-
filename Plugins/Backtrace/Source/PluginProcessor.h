@@ -462,7 +462,10 @@ private:
     int  renderProcessed(juce::AudioBuffer<float>& dest, int total);  // central routing render, returns length
     int  fillSource(juce::AudioBuffer<float>& dest, bool reverse);    // load selection forward or reversed
     void applyPitch(juce::AudioBuffer<float>& buf, int len, float semitones);  // offline, latency-compensated
-    void applyDelay(juce::AudioBuffer<float>& buf, int total, bool wetOnly = false, double fillSec = 0.0);
+    // maxTimeMs > 0 caps the delay Time for THIS render only — the live preverb kernel uses it so
+    // repeats always fit its (often sub-second) window; the printed swell never clamps.
+    void applyDelay(juce::AudioBuffer<float>& buf, int total, bool wetOnly = false, double fillSec = 0.0,
+                    float maxTimeMs = -1.0f);
     void applyReverb(juce::AudioBuffer<float>& buf, int total, bool wetOnly = false, double fillSec = 0.0,
                      float decayOverride = -1.0f, float density = 0.0f, float shimmerScale = 1.0f,
                      float predelayScale = 1.0f);

@@ -1728,7 +1728,10 @@ void BacktraceEditor::timerCallback()
     {
         refreshSwellCanvas();
         updateSwellSelLabel();
-        if (proc.consumePendingAutoPlay()) { proc.setSwellMode(true); proc.startReverseAudition(false); }
+        // Auto-play only when the host transport is stopped — auditioning ON TOP of the rolling
+        // track reads as a doubled/flammed vocal. While playing, the render just lands silently.
+        if (proc.consumePendingAutoPlay() && ! proc.isHostPlaying())
+        { proc.setSwellMode(true); proc.startReverseAudition(false); }
         statusLabel.setText(proc.hasSwell()
             ? "Swell created - playing. Print / Export / Drag to use it."
             : "Load a source first (drag audio in)", juce::dontSendNotification);

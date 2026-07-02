@@ -51,3 +51,21 @@ target_link_libraries(Clocker PRIVATE
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
 )
+
+# ---------------------------------------------------------------------------
+# Headless logic test (console) — timer engine, billing math, rounding,
+# exports, and the save/restore auto-close path. No GUI, no audio.
+# ---------------------------------------------------------------------------
+juce_add_console_app(ClockerLogicTest PRODUCT_NAME "ClockerLogicTest")
+juce_generate_juce_header(ClockerLogicTest)
+target_sources(ClockerLogicTest PRIVATE Tests/LogicTest.cpp Source/PluginProcessor.cpp)
+target_include_directories(ClockerLogicTest PRIVATE Source ../../Common)
+target_compile_definitions(ClockerLogicTest PRIVATE
+    CLOCKER_NO_EDITOR=1
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+    JUCE_STANDALONE_APPLICATION=1)
+target_link_libraries(ClockerLogicTest PRIVATE
+    juce::juce_audio_processors
+    juce::juce_audio_utils
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)

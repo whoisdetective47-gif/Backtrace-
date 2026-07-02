@@ -1271,7 +1271,9 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
             juce::AudioBuffer<float> ir2(ch, M);
             ir2.clear();
             for (int c = 0; c < ch; ++c) ir2.setSample(c, 0, 1.0f);
-            applyDelay(ir2, M, /*wetOnly*/ true, mSec);
+            // Clamp Time to the window so >= ~3.5 repeats always fit (long TIME settings keep the
+            // user's Time untouched — the clamp only bites when the window is shorter than it).
+            applyDelay(ir2, M, /*wetOnly*/ true, mSec, (float) (mSec * 1000.0 / 3.5));
             for (int c = 0; c < ch; ++c)
                 std::reverse(ir2.getWritePointer(c), ir2.getWritePointer(c) + M);
             const float rb   = juce::jmax(0.05f, reverbBlendAmt.load());
@@ -1325,6 +1327,12 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
         const float envRate  = juce::jlimit(0.8f, 8.5f, baseRate + shapeDev * spread);
         const float aHp     = (float) std::exp(-2.0 * juce::MathConstants<double>::pi * 110.0 / juce::jmax(1.0, currentSR));
         const float aLp     = 1.0f - (float) std::exp(-2.0 * juce::MathConstants<double>::pi * lpHz / juce::jmax(1.0, currentSR));
+        // SHAPE extremes get extra reach (0.2..0.8 — including the validated 0.5 — is untouched):
+        // above 0.8 an onset GATE silences up to the first 25% then surges (hold…then bloom);
+        // below 0.2 an early FLOOR keeps the swell audibly present from the start (drags in).
+        const float shp      = liveShape.load();
+        const float gateS0   = shp > 0.8f ? (shp - 0.8f) * 1.25f : 0.0f;          // 0..0.25 of the window
+        const float flatten  = shp < 0.2f ? 0.45f * (0.2f - shp) / 0.2f : 0.0f;   // 0..0.45 pull toward flat
         for (int c = 0; c < ch; ++c)
         {
             float* d = ir.getWritePointer(c);
@@ -1335,7 +1343,14 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
                 hpZ = aHp * hpZ + (1.0f - aHp) * x; x = x - hpZ;
                 lpZ += aLp * (x - lpZ);             x = lpZ;
                 const float t = (M > 1) ? (float) i / (float) (M - 1) : 1.0f;
-                d[i] = x * std::exp((t - 1.0f) * envRate);
+                float env = std::exp((t - 1.0f) * envRate);
+                if (flatten > 0.0f) env += flatten * (1.0f - env);   // gentle end: drags in from the very start
+                if (gateS0 > 0.0f)
+                {
+                    const float u  = t <= gateS0 ? 0.0f : (t - gateS0) / (1.0f - gateS0);
+                    env *= u * u * (3.0f - 2.0f * u);   // smoothstep gate → hold, then surge
+                }
+                d[i] = x * env;
             }
         }
     }
@@ -2181,7 +2196,8 @@ void BacktraceProcessor::applyOutputSafety(juce::AudioBuffer<float>& buf, int to
 
 // Offline delay over buf[0,total). Source sits in [0,base); the silent tail lets
 // the feedback repeats ring out. The active flavor owns its full dry/wet mix.
-void BacktraceProcessor::applyDelay(juce::AudioBuffer<float>& buf, int total, bool wetOnly, double fillSec)
+void BacktraceProcessor::applyDelay(juce::AudioBuffer<float>& buf, int total, bool wetOnly, double fillSec,
+                                    float maxTimeMs)
 {
     const int flavor = delayFlavor.load();
     DelayMachine* machine = (flavor == 1) ? (DelayMachine*) &tapeEcho
@@ -2203,6 +2219,9 @@ void BacktraceProcessor::applyDelay(juce::AudioBuffer<float>& buf, int total, bo
         const double ms = delayDivisionQuarters(delayDivision.load()) * (60000.0 / bpm);
         p[0] = juce::jlimit(1.0f, 2000.0f, (float) ms);
     }
+    // Window clamp (live kernel): a 350-500 ms Time in a half-second pre-swell window fits ZERO
+    // repeats → "the delay produces nothing". Cap Time so several repeats always land inside.
+    if (maxTimeMs > 0.0f) p[0] = juce::jmin(p[0], maxTimeMs);
     {
         const float tail  = macroTail.load();    // Tail macro → more feedback repeats
         const float ghost = macroGhost.load();   // Ghost macro → more movement/character (blur)

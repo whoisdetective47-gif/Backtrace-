@@ -888,6 +888,52 @@ int main()
         proc.setDelayBlend(0.0f); proc.setMacroRingout(0.35f); proc.setDelayFlavor(0);
     }
 
+    std::printf("17. Live kernel: EVERY delay flavor audible in a short window + SHAPE extremes:\n");
+    {
+        // The bug this guards: default delay Times (300-500 ms) fit ZERO repeats in a 1/4-note
+        // live window (0.5 s) → Digital Pedal / Cold Rack / Vault Delay produced literal silence.
+        setReverb(proc, 1);
+        proc.setLiveTimeIndex(3); proc.setLiveFeel(0); proc.setLiveShape(0.5f); proc.setPitchSemitones(0.0f);
+        proc.setDelaySync(false); proc.setReverbBlend(1.0f);
+        proc.prepareToPlay(SR, 512);
+        const int M = proc.preverbLengthSamples();
+        juce::AudioBuffer<float> kOff(2, M);
+        proc.setDelayBlend(0.0f); proc.setDelayFlavor(1); proc.buildLiveKernel(kOff);
+        static const char* dn[] = { "", "Reel Echo", "Digital Pedal", "Magnetic Drum",
+                                    "Tape Witness", "Cold Rack", "Vault Delay" };
+        for (int fl = 1; fl <= 6; ++fl)
+        {
+            proc.setDelayFlavor(fl);
+            const auto dl = delayKnobLayout(fl);
+            for (int i = 0; i < dl.size() && i < 8; ++i) if (dl[i].used()) proc.setDelayParam(i, dl[i].def);
+            proc.setDelayBlend(1.0f);
+            juce::AudioBuffer<float> k(2, M);
+            proc.buildLiveKernel(k);
+            const double diff = maxAbsDiff(kOff, k);
+            check(juce::String(dn[fl]) + " audible in a 1/4 live window", diff > 2.0e-3,
+                  "kernelDiff=" + juce::String(diff, 5));
+        }
+        proc.setDelayBlend(0.0f); proc.setDelayFlavor(0);
+
+        // SHAPE extremes: Bloom(1.0) now gates the onset (even more back-loaded than 0.85);
+        // Gentle(0.0) floors the early region (audibly present from the start).
+        auto lateEarly = [&](float shape)
+        {
+            proc.setLiveShape(shape);
+            juce::AudioBuffer<float> k(2, M); proc.buildLiveKernel(k);
+            double eE = 0.0, eL = 0.0; const float* d = k.getReadPointer(0);
+            for (int i = 0; i < M / 2; ++i) eE += (double) d[i] * d[i];
+            for (int i = M / 2; i < M; ++i) eL += (double) d[i] * d[i];
+            return eL / juce::jmax(1.0e-12, eE);
+        };
+        const double rG0 = lateEarly(0.0f), rG = lateEarly(0.15f), rB = lateEarly(0.85f), rB1 = lateEarly(1.0f);
+        check("SHAPE 1.0 gate = even later than 0.85", rB1 > rB * 1.2,
+              "0.85=" + juce::String(rB, 1) + " 1.0=" + juce::String(rB1, 1));
+        check("SHAPE 0.0 floor = even earlier than 0.15", rG0 < rG * 0.85,
+              "0.15=" + juce::String(rG, 2) + " 0.0=" + juce::String(rG0, 2));
+        proc.setLiveShape(0.5f);
+    }
+
     std::printf("\nRESULT: %d passed, %d failed -> %s\n", g_pass, g_fail,
                 g_fail == 0 ? "ALL RENDER CHECKS PASS" : "FAILURES ABOVE");
     tmp.deleteRecursively();

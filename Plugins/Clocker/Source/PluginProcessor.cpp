@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
-#include "PluginEditor.h"
+#if ! CLOCKER_NO_EDITOR
+ #include "PluginEditor.h"
+#endif
 
 using namespace clocker;
 
@@ -505,7 +507,11 @@ void ClockerProcessor::setStateInformation (const void* data, int sizeInBytes)
 
 juce::AudioProcessorEditor* ClockerProcessor::createEditor()
 {
+#if CLOCKER_NO_EDITOR
+    return nullptr;
+#else
     return new ClockerEditor (*this);
+#endif
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
