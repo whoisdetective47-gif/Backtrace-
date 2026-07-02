@@ -280,16 +280,25 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     {
         if (proc.getAuditionWhat() == 2) { proc.stopReverseAudition(); return; }
         proc.setSwellMode(true);
-        proc.startReverseAudition(false);   // replay edited swell, no re-render
-        if (! proc.hasSwell())
-            statusLabel.setText("Nothing to play - press Create Swell", juce::dontSendNotification);
-        else if (proc.isSwellStale())
-            statusLabel.setText("Playing previous swell - press Create Swell to update", juce::dontSendNotification);
-        else
-            statusLabel.setText("Playing swell", juce::dontSendNotification);
+        // WHAT YOU HEAR = CURRENT SETTINGS, always. A stale print (any tail-shaping change since
+        // the last render) silently replaying the OLD sound was the "nothing changed" trap —
+        // now Play Swell rebuilds first (background render → auto-plays when done).
+        if (! proc.hasSwell() || proc.isSwellStale())
+        {
+            if (proc.getTrimOut() - proc.getTrimIn() <= 0)
+            {
+                statusLabel.setText("Load a source first (drag audio in)", juce::dontSendNotification);
+                return;
+            }
+            proc.requestRender(true);
+            statusLabel.setText("Rendering swell with current settings...", juce::dontSendNotification);
+            return;
+        }
+        proc.startReverseAudition(false);   // print is current → replay it exactly
+        statusLabel.setText("Playing swell", juce::dontSendNotification);
     };
-    reverseButton.setTooltip("Replay the current rendered swell exactly as it will print/export/drag. "
-                             "If a tail setting changed, press Create Swell to rebuild first.");
+    reverseButton.setTooltip("Play the swell with the CURRENT settings - rebuilds automatically if a "
+                             "setting changed since the last render. Hear = print, always.");
     addAndMakeVisible(reverseButton);
 
     // --- Audition Tail: hear the FORWARD wet FX tail BEFORE it is reversed ---

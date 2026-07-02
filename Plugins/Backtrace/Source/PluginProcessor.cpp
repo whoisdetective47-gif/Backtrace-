@@ -1663,11 +1663,27 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
             for (int i = 0; i < swellLen; ++i) d[i] = w[tailStart + swellLen - 1 - i];
         }
     }
+    else if (keepPitch.load())
+    {
+        // PAD, DON'T STRETCH (the fix for the "flying saucer"): when the natural bloom can't
+        // fill the requested window (short lyric, long swell), place the REAL reversed material
+        // at the END of the window — landing-aligned — and leave silence before it. A 2-bar
+        // print whose bloom is only 1 bar = 1 bar of silence, then the true swell into the
+        // landing: always recognizable, always musical, drops perfectly onto the grid.
+        // (The old phase-vocoder fit stretched a half-second word across bars — the saucer.)
+        const int off = swellLen - avail;
+        for (int c = 0; c < dest.getNumChannels(); ++c)
+        {
+            const int sc = juce::jmin(c, work.getNumChannels() - 1);
+            const float* w = work.getReadPointer(sc);
+            float* d = dest.getWritePointer(c);
+            for (int i = 0; i < avail; ++i) d[off + i] = w[tailStart + avail - 1 - i];
+        }
+    }
     else
     {
-        // Rare (only if the 30 s window cap can't supply a full swell): reverse a COPY of
-        // the available tail and fit it to length — never reverse the shared work buffer,
-        // so the forward tail survives for the ringout below.
+        // Keep Pitch OFF = deliberate varispeed fit (tape-style reverse drop) — a creative
+        // choice, never the default. Copy-reverse then resample to length.
         std::vector<float> tmp((size_t) juce::jmax(1, avail));
         for (int c = 0; c < dest.getNumChannels(); ++c)
         {
@@ -1675,9 +1691,8 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
             const float* w = work.getReadPointer(sc);
             for (int i = 0; i < avail; ++i) tmp[(size_t) i] = w[tailStart + avail - 1 - i];
             float* d = dest.getWritePointer(c);
-            if (keepPitch.load())
-                btPhaseVocoderStretch(tmp.data(), avail, d, swellLen);
-            else { juce::LagrangeInterpolator in; in.process((double) avail / juce::jmax(1, swellLen), tmp.data(), d, swellLen); }
+            juce::LagrangeInterpolator in;
+            in.process((double) avail / juce::jmax(1, swellLen), tmp.data(), d, swellLen);
         }
     }
 
@@ -1688,6 +1703,7 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
     // skips everything → the classic reverb-only swell is bit-identical. applyEdit's loudness
     // stage re-normalises after the blend, so Blend knobs shape BALANCE, never total level.
     float rbApplied = 1.0f;
+    bool  delayLayerOn = false;
     {
         const float db = delayBlendAmt.load();
         const float rb = reverbBlendAmt.load();
@@ -1700,6 +1716,7 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
             const int b2 = fillSource(renderWork2, false);
             if (b2 > 0)
             {
+                delayLayerOn = true;
                 applyPitch(renderWork2, b2, pitchSemitones.load());
                 applyDelay(renderWork2, renderLen, true, swellSec);        // delay-only forward tail
                 const float sw = delaySwellPos.load();
@@ -1753,6 +1770,13 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
                 for (int i = renderLen - 1; i > fe; --i)
                     if (std::abs(w[i]) > thr) { fe = i; break; }
             }
+            if (delayLayerOn)                                               // delay repeats may trail LONGER
+                for (int c = 0; c < renderWork2.getNumChannels(); ++c)
+                {
+                    const float* w2 = renderWork2.getReadPointer(c);
+                    for (int i = renderLen - 1; i > fe; --i)
+                        if (std::abs(w2[i]) > thr) { fe = i; break; }
+                }
             ringout = juce::jlimit(0, juce::jmax(0, fe - tailStart - 1), want);
         }
     }
@@ -1765,7 +1789,15 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
         const int sc = juce::jmin(c, work.getNumChannels() - 1);
         auto* d = dest.getWritePointer(c);
         const auto* w = work.getReadPointer(sc);
-        for (int i = 0; i < ringout; ++i) d[swellLen + i] = w[tailStart + 1 + i] * rbApplied;   // ringout follows Reverb Blend
+        // Ringout = reverb forward tail (× Reverb Blend) PLUS the delay's forward repeats
+        // (× Delay Blend) — so echoes TRAIL past the landing like a real delay's feedback
+        // instead of hard-cutting at the swell end. Ringout macro sets how much trails.
+        const float* w2 = delayLayerOn ? renderWork2.getReadPointer(juce::jmin(c, renderWork2.getNumChannels() - 1))
+                                       : nullptr;
+        const float dbTrail = delayBlendAmt.load();
+        for (int i = 0; i < ringout; ++i)
+            d[swellLen + i] = w[tailStart + 1 + i] * rbApplied
+                            + (w2 != nullptr ? w2[tailStart + 1 + i] * dbTrail : 0.0f);
     }
 
     // Boundary shaping: a short fade-IN on the quiet rise start, and a musical release at

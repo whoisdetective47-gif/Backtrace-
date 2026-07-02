@@ -848,6 +848,46 @@ int main()
         proc.setDelayFlavor(0);
     }
 
+    std::printf("16. Pad-don't-stretch (no 'flying saucer') + delay trail past landing:\n");
+    {
+        // A short vocal into a LONG swell with NO FX must be the reversed word placed at the
+        // END of the window with silence before it — never a phase-vocoder-stretched wash.
+        loadVocal();                                  // 0.4 s word
+        proc.setDelayFlavor(0); proc.setReverbFlavor(0);
+        proc.setKeepPitch(true);
+        proc.setSwellLenBars(2.0f);                   // @120 BPM = 4 s >> the word
+        int landP = 0; auto padded = createSwell(proc, tmp, landP, sr);
+        const int n = juce::jmin(landP, padded.getNumSamples());
+        const double headRms = rms(padded, 0, n / 2);                       // pad region ≈ silence
+        const double endRms  = rms(padded, n - (int) (SR * 0.35), n);       // reversed word at the landing
+        check("no FX + long window: silence pad, REAL word at landing", endRms > 0.02 && headRms < endRms * 0.02,
+              "headRms=" + juce::String(headRms, 5) + " endRms=" + juce::String(endRms, 4));
+        check("padded print fills the full musical window", landP >= (int) (SR * 3.5),
+              "landing=" + juce::String(landP) + " (~" + juce::String(landP / SR, 2) + " s)");
+
+        // Delay trail: with Delay Blend up and Ringout on, echoes must CONTINUE past the
+        // landing (real feedback trail) instead of hard-cutting at the swell end.
+        loadSnare();
+        setReverb(proc, 1);
+        setDelay(proc, 1, 150.0f, 0.85f);
+        proc.setDelaySync(false);
+        proc.setMacroRingout(1.0f);
+        proc.setSwellLenBars(1.0f);
+        // Direct proof, unconfounded by per-render normalisation: with the reverb layer muted
+        // (pure delay layer), the print must still RING past the landing — echoes trailing,
+        // not a hard cut at the swell end.
+        proc.setDelayBlend(1.0f); proc.setReverbBlend(0.0f);
+        int landB = 0; auto trail = createSwell(proc, tmp, landB, sr);
+        const double postRms = rms(trail, landB + (int) (SR * 0.05), landB + (int) (SR * 1.0));
+        check("delay repeats trail past the landing (no hard cut)",
+              trail.getNumSamples() > landB + (int) (SR * 0.3) && postRms > 0.01,
+              "len=" + juce::String(trail.getNumSamples()) + " land=" + juce::String(landB)
+              + " postRms=" + juce::String(postRms, 4));
+        proc.setReverbBlend(1.0f);
+
+        proc.setDelayBlend(0.0f); proc.setMacroRingout(0.35f); proc.setDelayFlavor(0);
+    }
+
     std::printf("\nRESULT: %d passed, %d failed -> %s\n", g_pass, g_fail,
                 g_fail == 0 ? "ALL RENDER CHECKS PASS" : "FAILURES ABOVE");
     tmp.deleteRecursively();
