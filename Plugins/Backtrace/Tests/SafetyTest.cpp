@@ -155,7 +155,7 @@ int main()
     ok &= runStress<ModernSpace> ("Modern Space",  stressParams(reverbKnobLayout(2)).data());
     ok &= runStress<ShimmerVerb> ("Shimmer",       stressParams(reverbKnobLayout(3)).data());
     ok &= runStress<PlateVerb>   ("Studio Plate",  stressParams(reverbKnobLayout(4)).data());
-    ok &= runStress<SpringVerb>  ("626 Spring",    stressParams(reverbKnobLayout(5)).data());
+    ok &= runStress<SpringVerb>  ("Rust Spring",    stressParams(reverbKnobLayout(5)).data());
 
     // pitch shifter (+12) — not a feedback loop, but verify bounded
     {

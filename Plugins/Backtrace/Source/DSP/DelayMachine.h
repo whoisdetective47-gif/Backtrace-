@@ -51,14 +51,14 @@ inline juce::Array<DelayKnob> delayKnobLayout(int flavor)
             add("Mix",       0.0f, 1.0f, 0.40f); add("Duck",      0.0f, 1.0f, 0.00f);
             break;
 
-        case 3: // Magnetic Drum — Binson-style rotating drum echo
+        case 3: // Magnetic Drum — rotating drum echo
             add("Time", 1.0f, 2000.0f, 500.0f); add("Feedback",  0.0f, 0.95f, 0.32f);
             add("Tone",      0.0f, 1.0f, 0.50f); add("Character", 0.0f, 1.0f, 0.40f);
             add("Movement",  0.0f, 1.0f, 0.25f); add("Width",     0.0f, 1.0f, 0.50f);
             add("Duck",      0.0f, 1.0f, 0.15f); add("Mix",       0.0f, 1.0f, 0.25f);
             break;
 
-        case 4: // Tape Witness — Maestro/Echoplex gritty tape slap
+        case 4: // Tape Witness — gritty vintage tape slap
             add("Time", 1.0f, 2000.0f, 300.0f); add("Feedback",  0.0f, 0.95f, 0.30f);
             add("Tone",      0.0f, 1.0f, 0.50f); add("Character", 0.0f, 1.0f, 0.45f);
             add("Movement",  0.0f, 1.0f, 0.20f); add("Width",     0.0f, 1.0f, 0.35f);

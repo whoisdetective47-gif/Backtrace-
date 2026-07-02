@@ -209,7 +209,7 @@ int main()
     }
 
     // ---- 1b. RINGOUT IS GLOBAL: it must work IDENTICALLY for every reverb algorithm.
-    // (Regression guard for the shared-tail refactor — 626 / Ghost Shimmer used to hard-cut
+    // (Regression guard for the shared-tail refactor — Rust Spring / Ghost Shimmer used to hard-cut
     // at the landing because ringout was gated on the natural -40 dB tail reaching swellLen.)
     std::printf("1b. Ringout global across ALL reverbs:\n");
     {
@@ -791,6 +791,61 @@ int main()
         proc.setStateVar(btpreset::initState());
         check("INIT preset stays in Capture mode (live off)", ! proc.getLiveMode(), "");
         proc.setLiveMode(false);
+    }
+
+    std::printf("15. Delay layer (Blend/Swell) + copyright-safe names:\n");
+    {
+        check("legacy '626_spring' id migrates to Rust Spring", reverbFlavorFromName("626_spring") == 5, "");
+        check("Rust Spring id is clean ('rust_spring')", reverbFlavorName(5) == "rust_spring", "");
+
+        loadSnare();
+        setReverb(proc, 1);
+        setDelay(proc, 1, 150.0f, 0.85f);   // dense, long-feedback repeats → content spans the window
+        proc.setDelaySync(false);
+
+        // Baseline: Delay Blend 0 (default) = the classic reverb-only swell.
+        proc.setDelayBlend(0.0f); proc.setReverbBlend(1.0f); proc.setDelaySwell(0.5f);
+        auto base = createSwell(proc, tmp, landing, sr);
+
+        // Delay Blend up → an audibly different swell (the layer is real).
+        proc.setDelayBlend(1.0f);
+        auto withDelay = createSwell(proc, tmp, landing, sr);
+        check("Delay Blend adds an audible delay layer", maxAbsDiff(base, withDelay) > 1.0e-3,
+              "maxDiff=" + juce::String(maxAbsDiff(base, withDelay), 5));
+
+        // Delay Swell controls WHEN the layer blooms: with the reverb muted, a LOW setting keeps
+        // audible delay in the first half of the rise; a HIGH setting suppresses it there (the
+        // layer only arrives late). Compare the first-half energy share.
+        proc.setReverbBlend(0.0f);
+        auto firstHalfShare = [&](juce::AudioBuffer<float>& b, int land)
+        {
+            const int n = juce::jmin(land, b.getNumSamples());
+            double eAll = 0.0, eFirst = 0.0; const auto* d = b.getReadPointer(0);
+            for (int i = 0; i < n; ++i) { const double v = (double) d[i] * d[i]; eAll += v; if (i < n / 2) eFirst += v; }
+            return eFirst / juce::jmax(1.0e-12, eAll);
+        };
+        proc.setDelaySwell(0.05f); int landE = 0; auto early = createSwell(proc, tmp, landE, sr);
+        proc.setDelaySwell(0.95f); int landL = 0; auto late  = createSwell(proc, tmp, landL, sr);
+        const double sE = firstHalfShare(early, landE), sL = firstHalfShare(late, landL);
+        check("Delay Swell high = later bloom (early energy suppressed)", sE > sL * 1.3,
+              "firstHalfShare early=" + juce::String(sE, 4) + " late=" + juce::String(sL, 4));
+
+        // Live kernel: the delay layer reaches the preverb kernel too; default stays reverb-only.
+        proc.setReverbBlend(1.0f); proc.setLiveTimeIndex(3); proc.setLiveFeel(0);
+        proc.prepareToPlay(SR, 512);
+        const int M = proc.preverbLengthSamples();
+        juce::AudioBuffer<float> k0(2, M), k1(2, M);
+        proc.setDelayBlend(0.0f); proc.buildLiveKernel(k0);
+        proc.setDelayBlend(1.0f); proc.buildLiveKernel(k1);
+        check("live kernel gains the delay layer with Blend up", maxAbsDiff(k0, k1) > 1.0e-4,
+              "maxDiff=" + juce::String(maxAbsDiff(k0, k1), 6));
+        bool finite = true;
+        for (int c = 0; c < 2; ++c) { const float* d = k1.getReadPointer(c);
+            for (int i = 0; i < M; ++i) if (! std::isfinite(d[i])) finite = false; }
+        check("delay-layer kernel finite", finite, "");
+
+        proc.setDelayBlend(0.0f); proc.setReverbBlend(1.0f); proc.setDelaySwell(0.5f);
+        proc.setDelayFlavor(0);
     }
 
     std::printf("\nRESULT: %d passed, %d failed -> %s\n", g_pass, g_fail,

@@ -33,7 +33,7 @@ inline juce::Array<ReverbKnob> reverbKnobLayout(int flavor)
 
     switch (flavor)
     {
-        case 1: // Velvet Hall — Lexicon-style hall/chamber
+        case 1: // Velvet Hall — lush classic hall/chamber
             add("Size",   0.0f, 1.0f,   0.55f);  add("Decay",     0.0f, 1.0f,   0.35f);
             add("PreDly", 0.0f, 250.0f, 20.0f);  add("Tone",      0.0f, 1.0f,   0.66f);
             add("Diffuse",0.0f, 1.0f,   0.72f);  add("Mod",       0.0f, 1.0f,   0.25f);
@@ -41,7 +41,7 @@ inline juce::Array<ReverbKnob> reverbKnobLayout(int flavor)
             add("Duck",   0.0f, 1.0f,   0.20f);  add("Output",  -24.0f, 12.0f,  0.00f);
             break;
 
-        case 2: // Modern Space — Bricasti-style modern room/chamber/hall
+        case 2: // Modern Space — clean modern room/chamber/hall
             add("Size",   0.0f, 1.0f,   0.50f);  add("Decay",     0.0f, 1.0f,   0.32f);
             add("PreDly", 0.0f, 200.0f, 15.0f);  add("Tone",      0.0f, 1.0f,   0.55f);
             add("Diffuse",0.0f, 1.0f,   0.55f);  add("Mod",       0.0f, 1.0f,   0.15f);
@@ -57,7 +57,7 @@ inline juce::Array<ReverbKnob> reverbKnobLayout(int flavor)
             add("Shimmer",0.0f, 1.0f,   0.35f);  add("Output",  -24.0f, 12.0f,  0.00f);
             break;
 
-        case 4: // Studio Plate — EMT-140-style dense plate
+        case 4: // Phantom Plate — dense classic studio plate
             add("Size",   0.0f, 1.0f,   0.55f);  add("Decay",     0.0f, 1.0f,   0.42f);
             add("PreDly", 0.0f, 120.0f, 22.0f);  add("Tone",      0.0f, 1.0f,   0.58f);
             add("Diffuse",0.0f, 1.0f,   0.85f);  add("Mod",       0.0f, 1.0f,   0.18f);
@@ -65,7 +65,7 @@ inline juce::Array<ReverbKnob> reverbKnobLayout(int flavor)
             add("Duck",   0.0f, 1.0f,   0.18f);  add("Output",  -24.0f, 12.0f,  0.00f);
             break;
 
-        case 5: // 626 Spring — metallic spring tank
+        case 5: // Rust Spring — metallic spring tank
             add("Size",   0.0f, 1.0f,   0.45f);  add("Decay",     0.0f, 1.0f,   0.38f);
             add("PreDly", 0.0f, 80.0f,  12.0f);  add("Tone",      0.0f, 1.0f,   0.52f);
             add("Diffuse",0.0f, 1.0f,   0.42f);  add("Mod",       0.0f, 1.0f,   0.20f);
@@ -83,11 +83,12 @@ inline juce::String reverbFlavorName(int flavor)
 {
     switch (flavor) { case 1: return "velvet_hall"; case 2: return "modern_space";
                       case 3: return "shimmer"; case 4: return "studio_plate";
-                      case 5: return "626_spring"; default: return "off"; }
+                      case 5: return "rust_spring"; default: return "off"; }
 }
 
 inline int reverbFlavorFromName(const juce::String& n)
 {
     for (int i = 0; i <= 5; ++i) if (reverbFlavorName(i) == n) return i;
+    if (n == "626_spring") return 5;   // legacy sessions/presets (pre-rename) keep loading
     return 0;
 }

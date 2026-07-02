@@ -3,7 +3,7 @@
 #include "DSP/ReverbSpace.h"
 
 // =============================================================================
-//  SpringVerb ("626 Spring") — metallic spring-tank reverb (Phase 9, final).
+//  SpringVerb ("Rust Spring") — metallic spring-tank reverb (Phase 9, final).
 //
 //  The evidence tank: splashy, metallic, chirpy, dubby, imperfect, alive. The
 //  spring identity comes from a long DISPERSIVE ALLPASS CASCADE inside a feedback

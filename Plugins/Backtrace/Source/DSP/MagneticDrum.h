@@ -4,7 +4,7 @@
 #include "DSP/Saturation.h"
 
 // =============================================================================
-//  MagneticDrum ("Magnetic Drum") — Binson-inspired magnetic drum delay (Phase 8).
+//  MagneticDrum ("Magnetic Drum") — rotating magnetic-drum style echo (Phase 8).
 //
 //  Haunting, oily, circular drum echo: audio written to a rotating magnetic
 //  surface, read by multiple heads, smeared into a halo and destabilised by

@@ -3,7 +3,7 @@
 #include "DSP/ReverbSpace.h"
 
 // =============================================================================
-//  ModernSpace ("Modern Space") — Bricasti-style modern room/chamber/hall (Phase 9).
+//  ModernSpace ("Modern Space") — clean modern room/chamber/hall (Phase 9).
 //
 //  Clean, deep, dimensional, realistic reverb — the high-end natural space that
 //  contrasts with Velvet Hall's colorful modulated gloss. A convincing stereo

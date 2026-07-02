@@ -114,6 +114,11 @@ private:
     juce::Slider       liveShapeKnob;               // swell build-up curve (gentle ↔ dramatic bloom)
     juce::Label        liveShapeLabel { {}, "SHAPE" };
     juce::Slider       liveMixKnob;                 // GLOBAL MIX / Blend (bottom-right)
+    // Delay-layer controls: the reverb is the MAIN swell, the delay is a second layer with
+    // its own bloom timeline (Delay Swell = when it enters, not feedback).
+    juce::Slider       delayBlendSlider, delaySwellSlider, reverbBlendSlider;
+    juce::Label        delayBlendLabel { {}, "BLEND" }, delaySwellLabel { {}, "SWELL" },
+                       reverbBlendLabel { {}, "BLEND" };
     juce::Label        liveMixLabel  { {}, "MIX" };
     int lastLiveLatency = -1;
 
@@ -162,7 +167,13 @@ private:
     juce::Label       statusLabel;
     juce::Label       selectionLabel;
     WaveformCanvas    waveform;
-    LiveScope         liveScope;         // real-time output scope, overlays the source lane in Live mode
+    LiveScope         liveScope;         // real-time output scope, overlays the source lane in Live VIEW only
+    // Two clear workflows over one lane: LIVE VIEW (moving scope, real-time signal) vs CLIP/EDIT
+    // VIEW (still waveform + locators). Importing/capturing/selecting a clip ALWAYS returns to
+    // Clip view so editing is never fought by a moving display; the toggle re-enters Live view.
+    bool              liveViewActive = false;
+    juce::TextButton  viewToggleButton { "Live View" };   // shown only while LIVE PREVERB is on
+    void showClipView();
 
     // Printed-swell editor lane + final filter (this fix pass)
     juce::Label       sourceCaption  { {}, "1  SOURCE   (DRAG AUDIO IN)" };

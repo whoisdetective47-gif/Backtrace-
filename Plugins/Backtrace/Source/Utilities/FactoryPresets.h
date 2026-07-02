@@ -172,7 +172,7 @@ namespace btpreset
             buildState(3, {{"mix",0.28f}}, 1, {{"mix",0.28f}}, "delay_to_reverb", 0.0f, false));
         add("Reel Echo Guitar Bloom", "Guitar Swells",
             buildState(1, {{"mix",0.28f}}, 1, {{"mix",0.28f}}, "delay_to_reverb", 0.0f, false));
-        add("Iron Plate Guitar Wash", "Guitar Swells",
+        add("Phantom Plate Guitar Wash", "Guitar Swells",
             buildState(0, {}, 4, {{"mix",0.3f}}, "delay_to_reverb", 0.0f, false));
 
         // ============================== Synth / Cinematic ==============================
@@ -210,7 +210,7 @@ namespace btpreset
             buildState(0, {}, 2, {{"predly",45.0f},{"mix",0.25f},{"duck",0.3f}}, "delay_to_reverb", 0.0f, false));
         add("Velvet Hall Studio Throw", "Clean Studio",
             buildState(1, {{"mix",0.18f}}, 1, {{"mix",0.25f}}, "delay_to_reverb", 0.0f, false));
-        add("Iron Plate Vocal Sheen", "Clean Studio",
+        add("Phantom Plate Vocal Sheen", "Clean Studio",
             buildState(0, {}, 4, {{"tone",0.65f},{"duck",0.25f},{"mix",0.24f}}, "delay_to_reverb", 0.0f, false));
         add("Parallel Clean Bloom", "Clean Studio",
             buildState(2, {{"mix",0.28f}}, 2, {{"mix",0.22f}}, "parallel", 0.0f, false));
@@ -267,7 +267,7 @@ namespace btpreset
             buildState(0, {}, 2, {{"mix",0.32f}}, "reverse_before_fx", 0.0f, false));
 
         // ---- Drums & Percussion ----
-        add("626 Snare Splash", "Drums & Percussion",
+        add("Spring Snare Splash", "Drums & Percussion",
             buildState(0, {}, 5, {{"predly",8.0f},{"tone",0.5f},{"mix",0.25f}}, "delay_to_reverb", 0.0f, false));
         add("Dub Rim Tank", "Drums & Percussion",
             buildState(1, {{"feedback",0.45f}}, 5, {{"mix",0.3f}}, "feedback_verb_to_delay", 0.0f, false));
@@ -279,7 +279,7 @@ namespace btpreset
             buildState(2, {{"feedback",0.45f},{"mix",0.3f}}, 2, {{"mix",0.2f}}, "parallel", 0.0f, false));
 
         // ---- Guitar & Amp ----
-        add("Amp Spring 626", "Guitar & Amp",
+        add("Amp Rust Spring", "Guitar & Amp",
             buildState(0, {}, 5, {{"width",0.3f},{"mix",0.28f}}, "delay_to_reverb", 0.0f, false));
         add("Tape Guitar Ghost", "Guitar & Amp",
             buildState(4, {{"tone",0.35f},{"movement",0.4f}}, 1, {{"mix",0.28f}}, "delay_to_reverb", 0.0f, false));

@@ -4,7 +4,7 @@
 #include "DSP/Saturation.h"
 
 // =============================================================================
-//  TapeWitness ("Tape Witness") — Maestro/Echoplex-style gritty tape slap (Phase 8).
+//  TapeWitness ("Tape Witness") — gritty vintage tape-slap echo (Phase 8).
 //
 //  The rock-and-roll tape delay: direct, punchy, mid-forward and attitude-driven.
 //  Audio is pushed through a hot, colored preamp, printed to a worn single-head

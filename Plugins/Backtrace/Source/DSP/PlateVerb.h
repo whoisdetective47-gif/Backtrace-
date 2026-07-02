@@ -3,7 +3,7 @@
 #include "DSP/ReverbSpace.h"
 
 // =============================================================================
-//  PlateVerb ("Studio Plate") — EMT-140-style dense studio plate (Phase 9).
+//  PlateVerb ("Phantom Plate") — dense classic studio-plate reverb (Phase 9).
 //
 //  The classic vocal/snare plate: dense, smooth, bright-but-controlled, fast-
 //  building. No room/hall placement and no early-reflection engine — a Dattorro-

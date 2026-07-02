@@ -465,6 +465,35 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     delaySyncToggle.setColour(juce::ToggleButton::textColourId, juce::Colours::white.withAlpha(0.8f));
     delaySyncToggle.onClick = [this] { proc.setDelaySync(delaySyncToggle.getToggleState()); };
     addAndMakeVisible(delaySyncToggle);
+
+    // Delay layer: BLEND (how much delay joins the swell) + SWELL (WHEN it blooms — early with
+    // the reverb, or late into the landing). Reverb stays the main swell; this rides on top.
+    auto setupBlend = [this](juce::Slider& s, juce::Label& l, const char* tip, std::function<void(float)> set)
+    {
+        s.setSliderStyle(juce::Slider::LinearHorizontal);
+        s.setRange(0.0, 1.0, 0.01);
+        s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 38, 14);
+        s.textFromValueFunction = [](double v) { return juce::String(juce::roundToInt(v * 100.0)) + "%"; };
+        s.onValueChange = [&s, set] { set((float) s.getValue()); };
+        s.setTooltip(tip);
+        s.updateText();
+        addAndMakeVisible(s);
+        l.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.55f));
+        l.setFont(10.0f);
+        addAndMakeVisible(l);
+    };
+    setupBlend(delayBlendSlider, delayBlendLabel,
+               "DELAY BLEND - how much of the delay layer joins the final swell. 0% = classic reverb-only swell.",
+               [this](float v) { proc.setDelayBlend(v); });
+    setupBlend(delaySwellSlider, delaySwellLabel,
+               "DELAY SWELL - WHEN the delay blooms (envelope timing, not feedback). Low = enters early with "
+               "the reverb; high = arrives late and blooms right into the landing.",
+               [this](float v) { proc.setDelaySwell(v); });
+    setupBlend(reverbBlendSlider, reverbBlendLabel,
+               "REVERB BLEND - the main reverb layer's share of the final swell.",
+               [this](float v) { proc.setReverbBlend(v); });
+    delaySwellSlider.setDoubleClickReturnValue(true, 0.5);
+    reverbBlendSlider.setDoubleClickReturnValue(true, 1.0);
     for (int i = 0; i < 9; ++i) delayDivBox.addItem(delayDivisionName(i), i + 1);
     delayDivBox.setSelectedId(4, juce::dontSendNotification);   // 1/4
     delayDivBox.onChange = [this] { proc.setDelayDivision(delayDivBox.getSelectedId() - 1); };
@@ -495,9 +524,17 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     {
         proc.setLiveMode(liveModeToggle.getToggleState());
         proc.pushLiveLatencyIfChanged();
+        liveViewActive = liveModeToggle.getToggleState();   // turning Live ON shows the live view
         updateWorkflowHints();
     };
     addAndMakeVisible(liveModeToggle);
+
+    // View toggle — flips the source lane between the moving LIVE scope and the still
+    // CLIP/EDIT waveform (locator editing). Only shown while LIVE PREVERB is on.
+    viewToggleButton.onClick = [this] { liveViewActive = ! liveViewActive; };
+    viewToggleButton.setTooltip("Switch the top lane between LIVE VIEW (real-time signal) and "
+                                "CLIP VIEW (still waveform with A/B locators for editing).");
+    addChildComponent(viewToggleButton);
 
     liveWetKnob.setSliderStyle(juce::Slider::LinearHorizontal);
     liveWetKnob.setRange(0.0, 1.5, 0.01);
@@ -592,8 +629,8 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     reverbFlavorBox.addItem("Velvet Hall",    2);
     reverbFlavorBox.addItem("Modern Space",   3);
     reverbFlavorBox.addItem("Ghost Shimmer",  4);
-    reverbFlavorBox.addItem("Iron Plate 140", 5);
-    reverbFlavorBox.addItem("Rust Spring 626", 6);
+    reverbFlavorBox.addItem("Phantom Plate", 5);
+    reverbFlavorBox.addItem("Rust Spring",   6);
     reverbFlavorBox.setSelectedId(1, juce::dontSendNotification);
     reverbFlavorBox.onChange = [this]
     {
@@ -904,6 +941,9 @@ void BacktraceEditor::syncControlsFromProcessor()
     liveFeelBox.setSelectedId(proc.getLiveFeel() + 1, juce::dontSendNotification);
     liveShapeKnob.setValue(proc.getLiveShape(), juce::dontSendNotification);
     liveMixKnob.setValue(proc.getMacroMix(), juce::dontSendNotification);
+    delayBlendSlider.setValue(proc.getDelayBlend(), juce::dontSendNotification);
+    delaySwellSlider.setValue(proc.getDelaySwell(), juce::dontSendNotification);
+    reverbBlendSlider.setValue(proc.getReverbBlend(), juce::dontSendNotification);
 
     const int df = proc.getDelayFlavor();
     delayFlavorBox.setSelectedId(df + 1, juce::dontSendNotification);
@@ -961,6 +1001,7 @@ void BacktraceEditor::setSlotTab(int tab)
 
 void BacktraceEditor::selectSlot(int i)
 {
+    showClipView();     // picking a clip = editing intent → still waveform
     if (slotTab == 0)   // Source bank → drives the source lane + render input
     {
         proc.setActiveSource(i);
@@ -1241,9 +1282,18 @@ void BacktraceEditor::importFromDragText(const juce::String& text)
 }
 
 // Updates the UI after a successful source import (shared by all import paths).
+// Enter CLIP/EDIT view: any import/capture/slot-select means the user wants to EDIT a still
+// waveform with locators — the moving live display must never fight that. Live DSP keeps
+// running untouched; this only changes what the top lane shows.
+void BacktraceEditor::showClipView()
+{
+    liveViewActive = false;
+}
+
 void BacktraceEditor::onSourceImported(const juce::File& f)
 {
     if (f.getParentDirectory().isDirectory()) lastBrowseDir = f.getParentDirectory();
+    showClipView();
     slotTab = 0;   // show the Source bank
     const int a = proc.getActiveSource();
     btImportLog("  LOADED \"" + f.getFileName() + "\" -> source " + juce::String(a + 1)
@@ -1534,16 +1584,23 @@ void BacktraceEditor::timerCallback()
     transportLabel.setText(transportText(), juce::dontSendNotification);
     locatorLabel.setText(locatorText(), juce::dontSendNotification);
 
-    // Live scope: show it over the (unused) source lane in Live mode and animate at the timer rate.
-    const bool liveOn = proc.getLiveMode();
-    if (liveScope.isVisible() != liveOn) liveScope.setVisible(liveOn);
-    if (liveOn) liveScope.repaint();
+    // Two-view rule: the moving LIVE scope shows ONLY in Live view. Clip/Edit view (still
+    // waveform + locators) always wins after an import/capture/slot pick, even with Live DSP on.
+    const bool liveOn    = proc.getLiveMode();
+    const bool showScope = liveOn && liveViewActive;
+    if (liveScope.isVisible() != showScope) liveScope.setVisible(showScope);
+    if (showScope) liveScope.repaint();
+    if (viewToggleButton.isVisible() != liveOn) viewToggleButton.setVisible(liveOn);
+    viewToggleButton.setButtonText(liveViewActive ? "Clip View" : "Live View");   // shows what you SWITCH TO
 
     // Live Preverb: push any latency change to the host (message thread) + status readout.
     proc.pushLiveLatencyIfChanged();
     const bool live = proc.getLiveMode();
     if (live != liveModeToggle.getToggleState())
+    {
         liveModeToggle.setToggleState(live, juce::dontSendNotification);
+        liveViewActive = live;   // external switch (preset/session) follows the same view rule
+    }
     {
         const int    lat = proc.getLatencySamples();
         const double ms  = 1000.0 * lat / juce::jmax(1.0, proc.getCurrentSampleRate());
@@ -1673,6 +1730,7 @@ void BacktraceEditor::timerCallback()
     if (proc.captureJustFinished())
     {
         proc.commitCaptureToActiveSource();   // store the take into the active Source slot
+        showClipView();                       // captured clip → still waveform for locator editing
         slotTab = 0;
         refreshWaveform();
         swellCanvas.clearSwell();             // new source → printed swell must be re-rendered
@@ -1715,6 +1773,19 @@ void BacktraceEditor::paint(juce::Graphics& g)
     panel({ 226, 80, 458, 560 });   // center
     panel({ 692, 80, 300, 560 });   // right
     panel({ 8, 648, 984, 96 });     // macro strip
+
+    // Sound Detective family branding (matches Dust 12.47): the DETECTIVE 47 wordmark as a
+    // subtle watermark in the FX panel, plus the gold plate line. Quiet, noir, never loud.
+    if (logoImage.isValid())
+    {
+        g.beginTransparencyLayer(0.05f);
+        g.drawImageWithin(logoImage, 702, 300, 280, 120,
+                          juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize, false);
+        g.endTransparencyLayer();
+    }
+    g.setColour(juce::Colour(0xff8a7a55));
+    g.setFont(juce::Font(9.5f, juce::Font::bold));
+    g.drawText("REV.1  //  DETECTIVE 47  //  BACKTRACE", 452, 60, 310, 12, juce::Justification::right);
 
     g.setColour(juce::Colour(0xffc8a24a));                        // amber section captions
     g.setFont(11.0f);
@@ -1789,7 +1860,8 @@ void BacktraceEditor::resized()
         auto a = juce::Rectangle<int>(226, 80, 458, 560).reduced(8);
         sourceCaption.setBounds(a.removeFromTop(14));
         waveform.setBounds(a.removeFromTop(130));
-        liveScope.setBounds(waveform.getBounds());   // overlay the source lane (shown only in Live mode)
+        liveScope.setBounds(waveform.getBounds());   // overlay the source lane (shown only in Live VIEW)
+        viewToggleButton.setBounds(waveform.getBounds().removeFromTop(20).removeFromRight(78));
         {
             auto row = a.removeFromTop(22);
             playSourceButton.setBounds(row.removeFromLeft(96)); row.removeFromLeft(8);
@@ -1937,11 +2009,24 @@ void BacktraceEditor::resized()
             delaySyncToggle.setBounds(row.removeFromLeft(58));
             delayDivBox.setBounds(row.removeFromLeft(66));
         }
-        a.removeFromTop(6);
+        a.removeFromTop(3);
+        {                       // delay layer: BLEND + SWELL (when the delay blooms)
+            auto row = a.removeFromTop(18);
+            delayBlendLabel.setBounds(row.removeFromLeft(38));
+            delayBlendSlider.setBounds(row.removeFromLeft(100)); row.removeFromLeft(6);
+            delaySwellLabel.setBounds(row.removeFromLeft(38));
+            delaySwellSlider.setBounds(row);
+        }
+        a.removeFromTop(3);
         layoutKnobs(a.removeFromTop(150), delayKnobs, delayKnobLabels, 4);
-        a.removeFromTop(10);
+        a.removeFromTop(8);
         reverbCaption.setBounds(a.removeFromTop(14));
-        reverbFlavorBox.setBounds(a.removeFromTop(24).removeFromLeft(150));
+        {
+            auto row = a.removeFromTop(24);
+            reverbFlavorBox.setBounds(row.removeFromLeft(150)); row.removeFromLeft(6);
+            reverbBlendLabel.setBounds(row.removeFromLeft(38));
+            reverbBlendSlider.setBounds(row);
+        }
         a.removeFromTop(6);
         layoutKnobs(a.removeFromTop(150), reverbKnobs, reverbKnobLabels, 5);
         a.removeFromTop(10);

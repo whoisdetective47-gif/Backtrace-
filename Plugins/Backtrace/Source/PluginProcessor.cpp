@@ -260,6 +260,9 @@ juce::var BacktraceProcessor::getStateVar() const
     o->setProperty("liveTime", liveTimeIndex.load());
     o->setProperty("liveFeel", liveFeel.load());
     o->setProperty("liveShape", (double) liveShape.load());
+    o->setProperty("delayBlend",  (double) delayBlendAmt.load());
+    o->setProperty("reverbBlend", (double) reverbBlendAmt.load());
+    o->setProperty("delaySwell",  (double) delaySwellPos.load());
     o->setProperty("preset", (currentPreset >= 0) ? getPresetName(currentPreset) : juce::String());
 
     auto* mac = new juce::DynamicObject();   // global swell macros
@@ -338,6 +341,11 @@ void BacktraceProcessor::setStateVar(const juce::var& v)
     if (o->hasProperty("liveTime")) liveTimeIndex.store((int) o->getProperty("liveTime"));
     if (o->hasProperty("liveFeel")) liveFeel.store((int) o->getProperty("liveFeel"));
     if (o->hasProperty("liveShape")) liveShape.store((float) (double) o->getProperty("liveShape"));
+    // Blend layer — ALWAYS store (default when absent) so older presets/sessions reset cleanly
+    // instead of leaking the previous preset's blend into a state that never knew about it.
+    delayBlendAmt.store (o->hasProperty("delayBlend")  ? (float) (double) o->getProperty("delayBlend")  : 0.0f);
+    reverbBlendAmt.store(o->hasProperty("reverbBlend") ? (float) (double) o->getProperty("reverbBlend") : 1.0f);
+    delaySwellPos.store (o->hasProperty("delaySwell")  ? (float) (double) o->getProperty("delaySwell")  : 0.5f);
     requestLiveIR();                                  // rebuild the preverb kernel for restored settings
     if (dspPrepared.load()) pushLiveLatencyIfChanged();   // report restored preverb latency w/o needing the GUI
 
@@ -1252,6 +1260,39 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
     for (int c = 0; c < ch; ++c)                           // reverse → preverb (quiet build-up → loud landing)
         std::reverse(ir.getWritePointer(c), ir.getWritePointer(c) + M);
 
+    // DELAY LAYER (same design as the printed swell): a reversed delay tail with its own bloom
+    // onset (Delay Swell) blended in (Delay/Reverb Blend). Delay Blend 0 (default) skips this
+    // entirely → the ear-validated reverb-only kernel is untouched. The shared tone/Shape/crest/L2
+    // stages below then process the MIX, so both layers share one voice.
+    {
+        const float db = delayBlendAmt.load();
+        if (db > 0.001f && delayFlavor.load() != 0)
+        {
+            juce::AudioBuffer<float> ir2(ch, M);
+            ir2.clear();
+            for (int c = 0; c < ch; ++c) ir2.setSample(c, 0, 1.0f);
+            applyDelay(ir2, M, /*wetOnly*/ true, mSec);
+            for (int c = 0; c < ch; ++c)
+                std::reverse(ir2.getWritePointer(c), ir2.getWritePointer(c) + M);
+            const float rb = juce::jmax(0.05f, reverbBlendAmt.load());
+            const float sw = delaySwellPos.load();
+            const float s0 = 0.10f + 0.65f * sw;
+            const float pw = 1.0f  + 2.0f  * sw;
+            for (int c = 0; c < ch; ++c)
+            {
+                float* d = ir.getWritePointer(c);
+                const float* d2 = ir2.getReadPointer(c);
+                for (int i = 0; i < M; ++i)
+                {
+                    const float x  = (float) i / (float) juce::jmax(1, M - 1);
+                    const float u  = x <= s0 ? 0.0f : (x - s0) / (1.0f - s0);
+                    const float ss = u * u * (3.0f - 2.0f * u);
+                    d[i] = d[i] * rb + d2[i] * db * std::pow(ss, pw);
+                }
+            }
+        }
+    }
+
     // Shape: gentle FIXED tone (HPF de-mud + soft LPF — NO sweep) + an exponential BUILD-UP
     // envelope so the swell always grows into the landing (the reverb gives the texture, this
     // gives the shape). The reverb's own HF damping already blooms dark→bright naturally.
@@ -1365,6 +1406,7 @@ void BacktraceProcessor::pushLiveLatencyIfChanged()
 void BacktraceProcessor::startLivePreview()
 {
     if (! dspPrepared.load()) return;
+    if (rendering.load()) return;   // worker owns the shared FX machines mid-render — don't run them here too
 
     const int in = trimIn.load(), out = trimOut.load();
     int srcLen = out - in;
@@ -1639,6 +1681,55 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
         }
     }
 
+    // ---- DELAY LAYER + BLENDS: the reverb built the MAIN swell above; the delay is a second
+    // layer with its own bloom timeline. Delay Swell sets WHEN it blooms (an onset envelope over
+    // the rise — NOT feedback): low = enters early alongside the reverb, high = arrives late and
+    // blooms into the landing. Both layers end at the landing together. Delay Blend 0 (default)
+    // skips everything → the classic reverb-only swell is bit-identical. applyEdit's loudness
+    // stage re-normalises after the blend, so Blend knobs shape BALANCE, never total level.
+    float rbApplied = 1.0f;
+    {
+        const float db = delayBlendAmt.load();
+        const float rb = reverbBlendAmt.load();
+        const bool  wantLayer = hasFX && delayFlavor.load() != 0 && db > 0.001f && avail >= swellLen;
+        if (wantLayer)
+        {
+            if (renderWork2.getNumChannels() < 2 || renderWork2.getNumSamples() < renderLen)
+                renderWork2.setSize(2, renderLen, false, false, true);
+            renderWork2.clear();
+            const int b2 = fillSource(renderWork2, false);
+            if (b2 > 0)
+            {
+                applyPitch(renderWork2, b2, pitchSemitones.load());
+                applyDelay(renderWork2, renderLen, true, swellSec);        // delay-only forward tail
+                const float sw = delaySwellPos.load();
+                const float s0 = 0.10f + 0.65f * sw;                       // bloom onset (fraction of the rise)
+                const float pw = 1.0f  + 2.0f  * sw;                       // later setting = steeper arrival
+                rbApplied = (rb < 0.01f && db < 0.01f) ? 1.0f : juce::jmax(0.0f, rb);
+                for (int c = 0; c < dest.getNumChannels(); ++c)
+                {
+                    const int sc2 = juce::jmin(c, renderWork2.getNumChannels() - 1);
+                    const float* w2 = renderWork2.getReadPointer(sc2);
+                    float* d = dest.getWritePointer(c);
+                    for (int i = 0; i < swellLen; ++i)
+                    {
+                        const float x  = (float) i / (float) juce::jmax(1, swellLen - 1);
+                        const float u  = x <= s0 ? 0.0f : (x - s0) / (1.0f - s0);
+                        const float ss = u * u * (3.0f - 2.0f * u);        // smoothstep onset
+                        const float env = std::pow(ss, pw);
+                        const float dl  = w2[tailStart + swellLen - 1 - i];   // reversed delay tail
+                        d[i] = d[i] * rbApplied + dl * db * env;
+                    }
+                }
+            }
+        }
+        else if (hasFX && rb < 0.999f && delayFlavor.load() != 0 && db > 0.001f)
+        {
+            rbApplied = juce::jmax(0.05f, rb);   // layer wanted but window too short → just scale main
+            dest.applyGain(0, swellLen, rbApplied);
+        }
+    }
+
     // ---- SHARED ringout: continue the FORWARD wet tail PAST the landing for EVERY reverb.
     // The rise lands on work[tailStart] (= dest[swellLen-1]); work[tailStart+1 ..] continues
     // it seamlessly. Clamp to where the forward tail naturally falls to ~-60 dB, so SHORT
@@ -1674,7 +1765,7 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
         const int sc = juce::jmin(c, work.getNumChannels() - 1);
         auto* d = dest.getWritePointer(c);
         const auto* w = work.getReadPointer(sc);
-        for (int i = 0; i < ringout; ++i) d[swellLen + i] = w[tailStart + 1 + i];
+        for (int i = 0; i < ringout; ++i) d[swellLen + i] = w[tailStart + 1 + i] * rbApplied;   // ringout follows Reverb Blend
     }
 
     // Boundary shaping: a short fade-IN on the quiet rise start, and a musical release at
