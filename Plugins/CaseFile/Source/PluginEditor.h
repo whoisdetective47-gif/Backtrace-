@@ -45,6 +45,10 @@ namespace casefile::theme
     void bindText (juce::TextEditor&, const juce::Identifier& prop,
                    std::function<juce::ValueTree()> target);
     void setIfChanged (juce::TextEditor&, const juce::String& value);
+
+    // empty-state hint that floats over a ListBox and tells the user how to
+    // get started — shown while the list has no rows
+    void styleHint (juce::Label&, const juce::String& text);
 }
 
 // caption above a field, fixed row height — the standard form row everywhere
@@ -133,6 +137,7 @@ private:
     juce::TextEditor chordsEd, songNotesEd;
 
     juce::ListBox list { "sections", this };
+    juce::Label emptyHint;
     juce::ComboBox presetBox;
     juce::TextButton addBtn { "ADD SECTION" }, deleteBtn { "DELETE" };
     juce::TextEditor secNameEd, startTimeEd, endTimeEd, startBarEd, endBarEd,
@@ -185,13 +190,13 @@ private:
     juce::ValueTree selected() const;
     void refreshDetail();
 
-    juce::Label caps[8], statusLabel;
+    juce::Label caps[8], statusLabel, emptyHint;
     juce::TextEditor searchEd;
     juce::ComboBox filterBox;
     juce::ListBox list { "plugins", this };
     juce::TextButton addBtn { "ADD PLUGIN" }, deleteBtn { "DELETE" },
-                     pasteBtn { "BULK PASTE" }, importBtn { "IMPORT CSV" },
-                     exportBtn { "EXPORT CSV" };
+                     scanBtn { "SCAN FOLDERS" }, pasteBtn { "BULK PASTE" },
+                     importBtn { "IMPORT CSV" }, exportBtn { "EXPORT CSV" };
     juce::TextEditor nameEd, companyEd, bestUseEd, notesEd;
     juce::ComboBox categoryBox, ownershipBox;
     juce::ToggleButton favToggle { "Favorite" }, cpuToggle { "CPU heavy" },
@@ -200,24 +205,30 @@ private:
 };
 
 //==============================================================================
-//  HARDWARE LOCKER — manual outboard gear entries
+//  HARDWARE LOCKER — manual outboard gear entries + recall photos
 //==============================================================================
-class HardwareTab : public CaseTab, private juce::ListBoxModel
+class HardwareTab : public CaseTab, private juce::ListBoxModel,
+                    public juce::FileDragAndDropTarget
 {
 public:
     explicit HardwareTab (CaseFileProcessor&);
     void refresh() override;
     void resized() override;
 
+    // drop a photo of the gear onto the tab to attach it to the selected item
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int, int) override;
+
 private:
     int getNumRows() override;
     void paintListBoxItem (int row, juce::Graphics&, int w, int h, bool selected) override;
-    void selectedRowsChanged (int) override { refreshDetail(); }
+    void selectedRowsChanged (int) override { photoIndex = 0; refreshDetail(); }
     juce::Array<juce::ValueTree> visibleItems() const;
     juce::ValueTree selected() const;
     void refreshDetail();
+    void refreshPhoto();
 
-    juce::Label caps[10], statusLabel;
+    juce::Label caps[11], statusLabel, emptyHint, photoCounter;
     juce::TextEditor searchEd;
     juce::ComboBox filterBox;
     juce::ListBox list { "hardware", this };
@@ -227,6 +238,12 @@ private:
                      notesEd, recallEd;
     juce::ComboBox typeBox, stereoBox;
     juce::ToggleButton favToggle { "Favorite" };
+
+    juce::ImageComponent photoView;
+    juce::TextButton addPhotoBtn { "ADD PHOTO" }, removePhotoBtn { "REMOVE" },
+                     prevPhotoBtn { "<" }, nextPhotoBtn { ">" };
+    int photoIndex = 0;
+    std::unique_ptr<juce::FileChooser> photoChooser;
 };
 
 //==============================================================================
@@ -251,7 +268,7 @@ private:
     void refreshDetail();
     void importFiles (const juce::StringArray& paths);
 
-    juce::Label caps[4], infoLabel, statusLabel, hintLabel;
+    juce::Label caps[4], infoLabel, statusLabel, hintLabel, emptyHint;
     juce::ListBox list { "evidence", this };
     juce::TextButton importBtn { "IMPORT AUDIO" }, removeBtn { "REMOVE" },
                      analyzeBtn { "ANALYZE SELECTED" }, analyzeAllBtn { "ANALYZE ALL" };
@@ -293,7 +310,7 @@ private:
     juce::ValueTree selected() const;
     void refreshDetail();
 
-    juce::Label caps[6], statusLabel;
+    juce::Label caps[6], statusLabel, emptyHint;
     juce::ListBox list { "suspects", this };
     juce::TextButton addBtn { "ADD CUSTOM SUSPECT" }, deleteBtn { "DELETE" },
                      solveBtn { "MARK SOLVED" }, toChecklistBtn { "ADD TO CHECKLIST" };
@@ -318,7 +335,7 @@ private:
     juce::ValueTree selected() const;
     void refreshDetail();
 
-    juce::Label caps[13];
+    juce::Label caps[13], emptyHint;
     juce::ComboBox templateBox;
     juce::ListBox list { "chains", this };
     juce::TextButton addBtn { "ADD CHAIN" }, deleteBtn { "DELETE" };
@@ -343,7 +360,7 @@ private:
     juce::ValueTree selected() const;
     void refreshDetail();
 
-    juce::Label caps[7], statusLabel;
+    juce::Label caps[7], statusLabel, emptyHint;
     juce::ListBox list { "versions", this };
     juce::TextEditor newNameEd;
     juce::TextButton addBtn { "LOG VERSION" }, deleteBtn { "DELETE" },

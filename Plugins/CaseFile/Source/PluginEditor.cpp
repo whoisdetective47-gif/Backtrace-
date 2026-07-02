@@ -130,6 +130,15 @@ void theme::setIfChanged (juce::TextEditor& ed, const juce::String& v)
         ed.setText (v, false);
 }
 
+void theme::styleHint (juce::Label& l, const juce::String& text)
+{
+    l.setText (text, juce::dontSendNotification);
+    l.setFont (type (13.5f));
+    l.setColour (juce::Label::textColourId, inkDim);
+    l.setJustificationType (juce::Justification::centred);
+    l.setInterceptsMouseClicks (false, false);   // clicks fall through to the list
+}
+
 //==============================================================================
 // look & feel
 //==============================================================================
@@ -468,6 +477,8 @@ SongMapTab::SongMapTab (CaseFileProcessor& p) : CaseTab (p)
 
     list.setRowHeight (24);
     addAndMakeVisible (list);
+    theme::styleHint (emptyHint, "No sections mapped yet — pick a preset and hit ADD SECTION.");
+    addAndMakeVisible (emptyHint);
 
     refresh();
 }
@@ -538,6 +549,9 @@ void SongMapTab::refresh()
     theme::setIfChanged (chordsEd, m.getProperty (ids::chordProgression));
     theme::setIfChanged (songNotesEd, m.getProperty (ids::songNotes));
     list.updateContent();
+    if (getNumRows() > 0 && list.getSelectedRow() < 0)
+        list.selectRow (0);
+    emptyHint.setVisible (getNumRows() == 0);
     list.repaint();
     refreshDetail();
 }
@@ -579,6 +593,7 @@ void SongMapTab::resized()
     r.removeFromTop (6);
 
     list.setBounds (r.removeFromTop (juce::jmax (72, r.getHeight() * 24 / 100)));
+    emptyHint.setBounds (list.getBounds());
     r.removeFromTop (10);
 
     auto detail = r;

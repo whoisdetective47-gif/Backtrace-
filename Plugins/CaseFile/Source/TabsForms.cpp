@@ -107,6 +107,20 @@ PluginLibTab::PluginLibTab (CaseFileProcessor& p) : CaseTab (p)
     };
     addAndMakeVisible (deleteBtn);
 
+    theme::styleButton (scanBtn, theme::stamp.brighter (0.1f));
+    scanBtn.setTooltip ("Reads plugin names from your VST3/AU folders on disk. "
+                        "No plugin code is loaded, so it can't crash or slow the DAW.");
+    scanBtn.onClick = [this]
+    {
+        const int n = proc.scanPluginFolders();
+        statusLabel.setText (n > 0 ? "Scan complete — " + juce::String (n)
+                                       + " new plugins filed. Check categories and mark favorites."
+                                   : "Scan complete — nothing new. The library already has everything on disk.",
+                             juce::dontSendNotification);
+        refresh();
+    };
+    addAndMakeVisible (scanBtn);
+
     theme::styleButton (pasteBtn, theme::brass);
     pasteBtn.onClick = [this]
     {
@@ -158,6 +172,11 @@ PluginLibTab::PluginLibTab (CaseFileProcessor& p) : CaseTab (p)
     statusLabel.setFont (theme::type (11.0f));
     statusLabel.setColour (juce::Label::textColourId, theme::inkDim);
     addAndMakeVisible (statusLabel);
+
+    theme::styleHint (emptyHint, "No plugins on file yet.\n"
+                                 "SCAN FOLDERS reads your VST3/AU folders automatically — "
+                                 "or ADD PLUGIN / BULK PASTE / IMPORT CSV.");
+    addAndMakeVisible (emptyHint);
 
     refresh();
 }
@@ -236,6 +255,9 @@ void PluginLibTab::refreshDetail()
 void PluginLibTab::refresh()
 {
     list.updateContent();
+    if (getNumRows() > 0 && list.getSelectedRow() < 0)
+        list.selectRow (0);
+    emptyHint.setVisible (getNumRows() == 0);
     list.repaint();
     refreshDetail();
 }
@@ -245,22 +267,24 @@ void PluginLibTab::resized()
     auto r = getLocalBounds().reduced (18, 14);
 
     auto top = r.removeFromTop (44);
-    auto s = top.removeFromLeft (juce::jmax (160, top.getWidth() / 4));
+    auto s = top.removeFromLeft (170);
     placeField (s, caps[0], searchEd);
     top.removeFromLeft (10);
-    auto f = top.removeFromLeft (170);
+    auto f = top.removeFromLeft (160);
     placeField (f, caps[1], filterBox);
     top.removeFromLeft (14);
     auto btns = top.withTrimmedTop (14).withHeight (26);
-    addBtn.setBounds (btns.removeFromLeft (108));
+    addBtn.setBounds (btns.removeFromLeft (100));
     btns.removeFromLeft (6);
-    deleteBtn.setBounds (btns.removeFromLeft (78));
+    deleteBtn.setBounds (btns.removeFromLeft (72));
     btns.removeFromLeft (6);
-    pasteBtn.setBounds (btns.removeFromLeft (100));
+    scanBtn.setBounds (btns.removeFromLeft (112));
     btns.removeFromLeft (6);
-    importBtn.setBounds (btns.removeFromLeft (100));
+    pasteBtn.setBounds (btns.removeFromLeft (96));
     btns.removeFromLeft (6);
-    exportBtn.setBounds (btns.removeFromLeft (100));
+    importBtn.setBounds (btns.removeFromLeft (96));
+    btns.removeFromLeft (6);
+    exportBtn.setBounds (btns.removeFromLeft (96));
 
     r.removeFromTop (6);
     statusLabel.setBounds (r.removeFromBottom (16));
@@ -268,6 +292,7 @@ void PluginLibTab::resized()
     auto detail = r.removeFromRight (juce::jmax (260, r.getWidth() * 38 / 100));
     r.removeFromRight (14);
     list.setBounds (r);
+    emptyHint.setBounds (r);
 
     placeField (detail, caps[2], nameEd);
     placeField (detail, caps[3], companyEd);
@@ -293,11 +318,11 @@ void PluginLibTab::resized()
 //==============================================================================
 HardwareTab::HardwareTab (CaseFileProcessor& p) : CaseTab (p)
 {
-    const char* names[10] = { "SEARCH", "TYPE FILTER", "GEAR NAME", "BRAND",
+    const char* names[11] = { "SEARCH", "TYPE FILTER", "GEAR NAME", "BRAND",
                               "GEAR TYPE", "MONO / STEREO", "CHANNELS",
                               "CONNECTION / INSERT PATH", "FAVORITE USE",
-                              "NOTES + RECALL NOTES" };
-    for (int i = 0; i < 10; ++i)
+                              "NOTES + RECALL NOTES", "GEAR PHOTOS (RECALL)" };
+    for (int i = 0; i < 11; ++i)
     {
         theme::caption (caps[i], names[i]);
         addAndMakeVisible (caps[i]);
@@ -423,7 +448,104 @@ HardwareTab::HardwareTab (CaseFileProcessor& p) : CaseTab (p)
     statusLabel.setColour (juce::Label::textColourId, theme::inkDim);
     addAndMakeVisible (statusLabel);
 
+    theme::styleHint (emptyHint, "Locker's empty — hit ADD GEAR to file your first piece.\n"
+                                 "Then attach photos of settings for recall.");
+    addAndMakeVisible (emptyHint);
+
+    // --- gear photo panel ---------------------------------------------------
+    photoView.setImagePlacement (juce::RectanglePlacement::centred);
+    addAndMakeVisible (photoView);
+
+    photoCounter.setFont (theme::type (11.0f));
+    photoCounter.setColour (juce::Label::textColourId, theme::inkDim);
+    photoCounter.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (photoCounter);
+
+    theme::styleButton (addPhotoBtn, theme::approve);
+    addPhotoBtn.onClick = [this]
+    {
+        if (! selected().isValid()) return;
+        photoChooser = std::make_unique<juce::FileChooser> (
+            "Add gear photo(s)", juce::File(), "*.jpg;*.jpeg;*.png;*.heic;*.gif;*.bmp");
+        photoChooser->launchAsync (juce::FileBrowserComponent::openMode
+                                   | juce::FileBrowserComponent::canSelectFiles
+                                   | juce::FileBrowserComponent::canSelectMultipleItems,
+            [this] (const juce::FileChooser& fc)
+            {
+                auto t = selected();
+                if (! t.isValid()) return;
+                int n = 0;
+                for (const auto& f : fc.getResults())
+                    if (proc.addHardwarePhoto (t, f).isValid()) ++n;
+                if (n > 0)
+                {
+                    photoIndex = t.getChildWithName (ids::Photos).getNumChildren() - 1;
+                    statusLabel.setText ("Filed " + juce::String (n) + " photo(s) — archived copies in "
+                                         + CaseFileProcessor::gearPhotosFolder().getFullPathName(),
+                                         juce::dontSendNotification);
+                }
+                refreshPhoto();
+            });
+    };
+    addAndMakeVisible (addPhotoBtn);
+
+    theme::styleButton (removePhotoBtn, theme::stamp);
+    removePhotoBtn.onClick = [this]
+    {
+        auto t = selected();
+        auto photos = t.getChildWithName (ids::Photos);
+        if (photos.isValid() && photoIndex < photos.getNumChildren())
+        {
+            photos.removeChild (photoIndex, nullptr);      // keeps the archived file
+            photoIndex = juce::jmax (0, photoIndex - 1);
+            refreshPhoto();
+        }
+    };
+    addAndMakeVisible (removePhotoBtn);
+
+    theme::styleButton (prevPhotoBtn, theme::brass);
+    theme::styleButton (nextPhotoBtn, theme::brass);
+    prevPhotoBtn.onClick = [this] { --photoIndex; refreshPhoto(); };
+    nextPhotoBtn.onClick = [this] { ++photoIndex; refreshPhoto(); };
+    addAndMakeVisible (prevPhotoBtn);
+    addAndMakeVisible (nextPhotoBtn);
+
     refresh();
+}
+
+bool HardwareTab::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (const auto& f : files)
+        if (juce::File (f).hasFileExtension ("jpg;jpeg;png;heic;gif;bmp"))
+            return true;
+    return false;
+}
+
+void HardwareTab::filesDropped (const juce::StringArray& files, int, int)
+{
+    auto t = selected();
+    if (! t.isValid())
+    {
+        statusLabel.setText ("Select (or add) a piece of gear first, then drop its photo.",
+                             juce::dontSendNotification);
+        return;
+    }
+    int n = 0;
+    for (const auto& path : files)
+    {
+        juce::File f (path);
+        if (f.hasFileExtension ("jpg;jpeg;png;heic;gif;bmp")
+              && proc.addHardwarePhoto (t, f).isValid())
+            ++n;
+    }
+    if (n > 0)
+    {
+        photoIndex = t.getChildWithName (ids::Photos).getNumChildren() - 1;
+        statusLabel.setText ("Filed " + juce::String (n) + " photo(s) for "
+                             + t.getProperty (ids::name).toString() + ".",
+                             juce::dontSendNotification);
+    }
+    refreshPhoto();
 }
 
 juce::Array<juce::ValueTree> HardwareTab::visibleItems() const
@@ -496,11 +618,43 @@ void HardwareTab::refreshDetail()
     stereoBox.setSelectedId (has ? safeIndex (t.getProperty (ids::stereoMono), stereoMonoTypes()) + 1 : 0,
                              juce::dontSendNotification);
     favToggle.setToggleState (has && (bool) t.getProperty (ids::favorite), juce::dontSendNotification);
+    refreshPhoto();
+}
+
+void HardwareTab::refreshPhoto()
+{
+    auto t = selected();
+    auto photos = t.isValid() ? t.getChildWithName (ids::Photos) : juce::ValueTree();
+    const int count = photos.isValid() ? photos.getNumChildren() : 0;
+    photoIndex = count > 0 ? juce::jlimit (0, count - 1, photoIndex) : 0;
+
+    addPhotoBtn.setEnabled (t.isValid());
+    removePhotoBtn.setEnabled (count > 0);
+    prevPhotoBtn.setEnabled (photoIndex > 0);
+    nextPhotoBtn.setEnabled (photoIndex < count - 1);
+
+    juce::Image img;
+    if (count > 0)
+    {
+        const juce::File f (photos.getChild (photoIndex).getProperty (ids::path).toString());
+        if (f.existsAsFile())
+            img = juce::ImageCache::getFromFile (f);
+        photoCounter.setText (juce::String (photoIndex + 1) + " / " + juce::String (count)
+                              + (img.isValid() ? "" : "  (file missing)"),
+                              juce::dontSendNotification);
+    }
+    else
+        photoCounter.setText (t.isValid() ? "No photos yet — ADD PHOTO or drop an image here."
+                                          : "", juce::dontSendNotification);
+    photoView.setImage (img);
 }
 
 void HardwareTab::refresh()
 {
     list.updateContent();
+    if (getNumRows() > 0 && list.getSelectedRow() < 0)
+        list.selectRow (0);
+    emptyHint.setVisible (getNumRows() == 0);
     list.repaint();
     refreshDetail();
 }
@@ -528,7 +682,24 @@ void HardwareTab::resized()
 
     auto detail = r.removeFromRight (juce::jmax (280, r.getWidth() * 40 / 100));
     r.removeFromRight (14);
+
+    // left column: gear list on top, recall-photo panel below it
+    auto photoArea = r.removeFromBottom (juce::jmin (200, r.getHeight() / 2));
+    r.removeFromBottom (6);
     list.setBounds (r);
+    emptyHint.setBounds (r);
+
+    caps[10].setBounds (photoArea.removeFromTop (14));
+    auto photoBtns = photoArea.removeFromBottom (26);
+    prevPhotoBtn.setBounds (photoBtns.removeFromLeft (34));
+    photoBtns.removeFromLeft (4);
+    nextPhotoBtn.setBounds (photoBtns.removeFromLeft (34));
+    photoBtns.removeFromLeft (6);
+    addPhotoBtn.setBounds (photoBtns.removeFromLeft (juce::jmax (90, photoBtns.getWidth() / 2 - 40)));
+    photoBtns.removeFromLeft (6);
+    removePhotoBtn.setBounds (photoBtns);
+    photoCounter.setBounds (photoArea.removeFromBottom (16));
+    photoView.setBounds (photoArea.reduced (0, 2));
 
     {
         auto row = detail.removeFromTop (48);
@@ -630,6 +801,9 @@ ChainsTab::ChainsTab (CaseFileProcessor& p) : CaseTab (p)
         if (t.isValid()) { t.setProperty (ids::trackName, trackNameEd.getText(), nullptr); list.repaint(); }
     };
 
+    theme::styleHint (emptyHint, "No recall sheets yet —\npick a template and hit ADD CHAIN.");
+    addAndMakeVisible (emptyHint);
+
     refresh();
 }
 
@@ -682,6 +856,9 @@ void ChainsTab::refreshDetail()
 void ChainsTab::refresh()
 {
     list.updateContent();
+    if (getNumRows() > 0 && list.getSelectedRow() < 0)
+        list.selectRow (0);
+    emptyHint.setVisible (getNumRows() == 0);
     list.repaint();
     refreshDetail();
 }
@@ -703,6 +880,7 @@ void ChainsTab::resized()
     auto listArea = r.removeFromLeft (juce::jmax (180, r.getWidth() * 24 / 100));
     r.removeFromLeft (14);
     list.setBounds (listArea);
+    emptyHint.setBounds (listArea);
 
     auto colA = r.removeFromLeft ((r.getWidth() - 14) / 2);
     r.removeFromLeft (14);
@@ -808,6 +986,9 @@ VersionsTab::VersionsTab (CaseFileProcessor& p) : CaseTab (p)
     statusLabel.setColour (juce::Label::textColourId, theme::inkDim);
     addAndMakeVisible (statusLabel);
 
+    theme::styleHint (emptyHint, "No versions logged —\nLOG VERSION opens Mix 1.");
+    addAndMakeVisible (emptyHint);
+
     refresh();
 }
 
@@ -854,6 +1035,9 @@ void VersionsTab::refreshDetail()
 void VersionsTab::refresh()
 {
     list.updateContent();
+    if (getNumRows() > 0 && list.getSelectedRow() < 0)
+        list.selectRow (0);
+    emptyHint.setVisible (getNumRows() == 0);
     list.repaint();
     refreshDetail();
 }
@@ -879,6 +1063,7 @@ void VersionsTab::resized()
     auto listArea = r.removeFromLeft (juce::jmax (170, r.getWidth() * 22 / 100));
     r.removeFromLeft (14);
     list.setBounds (listArea);
+    emptyHint.setBounds (listArea);
 
     {
         auto row = r.removeFromTop (48);

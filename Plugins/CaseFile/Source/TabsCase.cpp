@@ -109,6 +109,10 @@ EvidenceTab::EvidenceTab (CaseFileProcessor& p) : CaseTab (p)
     statusLabel.setColour (juce::Label::textColourId, theme::inkDim);
     addAndMakeVisible (statusLabel);
 
+    theme::styleHint (emptyHint, "No evidence on file.\n"
+                                 "Drop your current mix + reference tracks here, or hit IMPORT AUDIO.");
+    addAndMakeVisible (emptyHint);
+
     refresh();
 }
 
@@ -224,6 +228,9 @@ void EvidenceTab::refreshDetail()
 void EvidenceTab::refresh()
 {
     list.updateContent();
+    if (getNumRows() > 0 && list.getSelectedRow() < 0)
+        list.selectRow (0);
+    emptyHint.setVisible (getNumRows() == 0);
     list.repaint();
     refreshDetail();
 }
@@ -247,6 +254,7 @@ void EvidenceTab::resized()
 
     caps[0].setBounds (r.removeFromTop (14));
     list.setBounds (r.removeFromTop (juce::jmax (100, r.getHeight() * 42 / 100)));
+    emptyHint.setBounds (list.getBounds());
     r.removeFromTop (10);
 
     auto colA = r.removeFromLeft ((r.getWidth() - 14) / 2);
@@ -411,6 +419,10 @@ SuspectsTab::SuspectsTab (CaseFileProcessor& p) : CaseTab (p)
     statusLabel.setColour (juce::Label::textColourId, theme::inkDim);
     addAndMakeVisible (statusLabel);
 
+    theme::styleHint (emptyHint, "No suspects on the board yet.\n"
+                                 "Run INVESTIGATE on the Analysis tab, or ADD CUSTOM SUSPECT.");
+    addAndMakeVisible (emptyHint);
+
     refresh();
 }
 
@@ -480,6 +492,9 @@ void SuspectsTab::refreshDetail()
 void SuspectsTab::refresh()
 {
     list.updateContent();
+    if (getNumRows() > 0 && list.getSelectedRow() < 0)
+        list.selectRow (0);
+    emptyHint.setVisible (getNumRows() == 0);
     list.repaint();
     refreshDetail();
 }
@@ -501,6 +516,7 @@ void SuspectsTab::resized()
     statusLabel.setBounds (r.removeFromBottom (16));
 
     list.setBounds (r.removeFromTop (juce::jmax (110, r.getHeight() * 38 / 100)));
+    emptyHint.setBounds (list.getBounds());
     r.removeFromTop (10);
 
     auto colA = r.removeFromLeft ((r.getWidth() - 14) / 2);

@@ -220,6 +220,73 @@ int main()
         v.setProperty (ids::changes, "Lowered vocal 0.7 dB", nullptr);
     }
 
+    //=== plugin folder scan (safe, file reads only) =============================
+    {
+        check (categoryFromVst3Subcategories ("Fx|Dynamics") == pluginCategories().indexOf ("Compressor"),
+               "VST3 Fx|Dynamics -> Compressor");
+        check (categoryFromVst3Subcategories ("Fx|EQ") == pluginCategories().indexOf ("EQ"),
+               "VST3 Fx|EQ -> EQ");
+        check (categoryFromVst3Subcategories ("Fx|Reverb") == pluginCategories().indexOf ("Reverb"),
+               "VST3 Fx|Reverb -> Reverb");
+        check (categoryFromName ("Valhalla VintageVerb") == pluginCategories().indexOf ("Reverb"),
+               "name heuristic: VintageVerb -> Reverb");
+        check (categoryFromName ("EchoBoy") == pluginCategories().indexOf ("Delay"),
+               "name heuristic: EchoBoy -> Delay");
+        check (categoryFromName ("SSL Bus Compressor") == pluginCategories().indexOf ("Compressor"),
+               "name heuristic: Bus Compressor -> Compressor");
+
+        // fake plugin folder: one VST3 with moduleinfo.json, one bare AU bundle
+        auto scanDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                           .getChildFile ("CaseFileScanTest");
+        scanDir.deleteRecursively();
+        auto v3 = scanDir.getChildFile ("TestVendor/Cool Space.vst3/Contents");
+        v3.createDirectory();
+        v3.getChildFile ("moduleinfo.json").replaceWithText (
+            R"({ "Name": "Cool Space",
+                 "Factory Info": { "Vendor": "Detective Labs" },
+                 "Classes": [ { "Name": "Cool Space", "Category": "Audio Module Class",
+                                "Sub Categories": [ "Fx", "Reverb" ] } ] })");
+        scanDir.getChildFile ("Tape Crusher.component/Contents").createDirectory();
+
+        const int found = p.scanPluginFolders ({ scanDir });
+        check (found == 2, "scan finds 2 bundles (" + juce::String (found) + ")");
+
+        juce::ValueTree coolSpace, crusher;
+        for (auto pl : p.pluginLib())
+        {
+            if (pl.getProperty (ids::name).toString() == "Cool Space")   coolSpace = pl;
+            if (pl.getProperty (ids::name).toString() == "Tape Crusher") crusher   = pl;
+        }
+        check (coolSpace.isValid()
+                 && (int) coolSpace.getProperty (ids::category) == pluginCategories().indexOf ("Reverb")
+                 && coolSpace.getProperty (ids::company).toString() == "Detective Labs",
+               "scan reads category + vendor from moduleinfo.json");
+        check (crusher.isValid()
+                 && (int) crusher.getProperty (ids::category) == pluginCategories().indexOf ("Tape"),
+               "scan falls back to name heuristics for bare bundles");
+        check (p.scanPluginFolders ({ scanDir }) == 0, "rescan adds no duplicates");
+        scanDir.deleteRecursively();
+    }
+
+    //=== hardware gear photos ===================================================
+    {
+        auto gear = p.hardware().getChild (0);
+        auto tempImg = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                           .getChildFile ("casefile_gear_test.png");
+        juce::Image img (juce::Image::RGB, 8, 8, true);
+        juce::PNGImageFormat png;
+        { juce::FileOutputStream os (tempImg); png.writeImageToStream (img, os); }
+
+        auto photo = p.addHardwarePhoto (gear, tempImg);
+        check (photo.isValid()
+                 && juce::File (photo.getProperty (ids::path).toString()).existsAsFile(),
+               "gear photo archived and on file");
+        check (gear.getChildWithName (ids::Photos).getNumChildren() == 1,
+               "photo attached to gear item");
+        tempImg.deleteFile();
+        juce::File (photo.getProperty (ids::path).toString()).deleteFile();
+    }
+
     //=== report & JSON ==========================================================
     {
         const auto rep = p.buildReport (false);
@@ -257,6 +324,8 @@ int main()
         check (q.pluginLib().getNumChildren() == p.pluginLib().getNumChildren(),
                "restore: plugin library survives");
         check (q.hardware().getNumChildren() == 1, "restore: hardware locker survives");
+        check (q.hardware().getChild (0).getChildWithName (ids::Photos).getNumChildren() == 1,
+               "restore: gear photo paths survive");
         check (q.suspects().getNumChildren() == p.suspects().getNumChildren(),
                "restore: suspect cards survive");
         check (q.chains().getNumChildren() == 1 && q.versions().getNumChildren() == 1,

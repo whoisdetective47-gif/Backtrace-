@@ -47,6 +47,7 @@ namespace ids
     // hardware
     CF_ID(brand) CF_ID(gearType) CF_ID(stereoMono) CF_ID(numChannels)
     CF_ID(insertPath) CF_ID(favoriteUse) CF_ID(recallNotes) CF_ID(maintenanceNotes)
+    CF_ID(Photos) CF_ID(Photo)
     // checklist
     CF_ID(text) CF_ID(done) CF_ID(group) CF_ID(section) CF_ID(fromSuspect) CF_ID(seeded)
     // evidence
@@ -83,6 +84,12 @@ const juce::StringArray& mixStages();          // Production, Pre-Mix, Mixing, .
 
 juce::String csvCell (const juce::String&);
 int safeIndex (const juce::var& v, const juce::StringArray& list);
+
+// plugin-folder scan helpers (pure, unit-tested): map a VST3 moduleinfo
+// sub-category string ("Fx|Dynamics") or a plugin name to our category list.
+// Return -1 when there's no confident match.
+int categoryFromVst3Subcategories (const juce::String& subCats);
+int categoryFromName (const juce::String& pluginName);
 
 } // namespace casefile
 
@@ -145,6 +152,18 @@ public:
     juce::String pluginLibCSV() const;
     int  importPluginCSV (const juce::String& csvText);
     juce::String hardwareCSV() const;
+
+    // Safe plugin scan: lists .vst3/.component bundles in the standard plugin
+    // folders and reads names + categories from bundle files (moduleinfo.json
+    // where present). NO plugin code is ever loaded, so it cannot crash or
+    // stall the DAW. Dedupes against the existing library. Returns #added.
+    int scanPluginFolders();
+    int scanPluginFolders (const juce::Array<juce::File>& foldersToScan);
+
+    // gear photos for hardware recall — the image is copied into the case
+    // archive so it survives even if the original moves; state stores the path
+    juce::ValueTree addHardwarePhoto (juce::ValueTree gearItem, const juce::File& image);
+    static juce::File gearPhotosFolder();     // ~/Documents/Sound Detective/Case File/Gear Photos
 
     //=== analysis & report text ===============================================
     juce::String buildAnalysisSummary() const;   // Analysis tab readout

@@ -511,6 +511,207 @@ int CaseFileProcessor::importPluginCSV (const juce::String& csvText)
     return bulkAddPlugins (lines.joinIntoString ("\n"));
 }
 
+//==============================================================================
+// plugin folder scan — file reads only, never loads plugin code
+//==============================================================================
+int casefile::categoryFromVst3Subcategories (const juce::String& subCatsIn)
+{
+    const auto s = subCatsIn.toLowerCase();
+    if (s.contains ("eq"))           return pluginCategories().indexOf ("EQ");
+    if (s.contains ("dynamics"))     return pluginCategories().indexOf ("Compressor");
+    if (s.contains ("reverb"))       return pluginCategories().indexOf ("Reverb");
+    if (s.contains ("delay"))        return pluginCategories().indexOf ("Delay");
+    if (s.contains ("distortion"))   return pluginCategories().indexOf ("Saturation");
+    if (s.contains ("mastering"))    return pluginCategories().indexOf ("Mastering Tool");
+    if (s.contains ("restoration"))  return pluginCategories().indexOf ("Repair");
+    if (s.contains ("analyzer"))     return pluginCategories().indexOf ("Metering");
+    if (s.contains ("pitch"))        return pluginCategories().indexOf ("Pitch");
+    if (s.contains ("modulation"))   return pluginCategories().indexOf ("Modulation");
+    if (s.contains ("generator")
+     || s.contains ("instrument")
+     || s.contains ("synth"))        return pluginCategories().indexOf ("Sound Design");
+    if (s.contains ("spatial")
+     || s.contains ("tools"))        return pluginCategories().indexOf ("Utility");
+    if (s.contains ("filter"))       return pluginCategories().indexOf ("Other");
+    return -1;
+}
+
+int casefile::categoryFromName (const juce::String& pluginName)
+{
+    const auto n = pluginName.toLowerCase();
+    auto any = [&n] (std::initializer_list<const char*> words)
+    {
+        for (auto* w : words)
+            if (n.contains (w)) return true;
+        return false;
+    };
+    // ordered from most to least specific so e.g. "FreqEcho" hits Delay, not EQ
+    if (any ({ "meter", "analyz", "scope", "lufs", "loudness", "spectrum" }))
+        return pluginCategories().indexOf ("Metering");
+    if (any ({ "de-ess", "deess", "vocal", "vox", "voice" }))
+        return pluginCategories().indexOf ("Vocal Tool");
+    if (any ({ "master" }))    return pluginCategories().indexOf ("Mastering Tool");
+    if (any ({ "limit" }))     return pluginCategories().indexOf ("Limiter");
+    if (any ({ "reverb", "verb", "plate", "spring", "room" }))
+        return pluginCategories().indexOf ("Reverb");
+    if (any ({ "echo", "delay" }))
+        return pluginCategories().indexOf ("Delay");
+    if (any ({ "tape" }))      return pluginCategories().indexOf ("Tape");
+    if (any ({ "satur", "drive", "distort", "fuzz", "crush", "clip" }))
+        return pluginCategories().indexOf ("Saturation");
+    if (any ({ "chorus", "flang", "phaser", "tremolo", "vibrato", "rotary", "ensemble" }))
+        return pluginCategories().indexOf ("Modulation");
+    if (any ({ "pitch", "tune" }))
+        return pluginCategories().indexOf ("Pitch");
+    if (any ({ "comp", "gate", "expander", "transient" }))
+        return pluginCategories().indexOf ("Compressor");
+    if (any ({ "drum", "kick", "snare" }))
+        return pluginCategories().indexOf ("Drum Tool");
+    if (any ({ "bass", "808", "sub" }))
+        return pluginCategories().indexOf ("Bass Tool");
+    if (any ({ " eq", "-eq", "equaliz", "equalis" }))
+        return pluginCategories().indexOf ("EQ");
+    if (any ({ "gain", "util", "pan ", "meter" }))
+        return pluginCategories().indexOf ("Utility");
+    return -1;
+}
+
+// moduleinfo.json ships inside modern VST3 bundles (VST 3.7.5+) — plain JSON
+// listing classes, sub-categories and vendor. Reading it is just a text read.
+static void readVst3ModuleInfo (const juce::File& bundle, juce::String& vendorOut, int& categoryOut)
+{
+    for (const auto& rel : { "Contents/moduleinfo.json", "Contents/Resources/moduleinfo.json" })
+    {
+        auto f = bundle.getChildFile (rel);
+        if (! f.existsAsFile()) continue;
+        auto parsed = juce::JSON::parse (f.loadFileAsString());
+        if (! parsed.isObject()) continue;
+
+        auto factory = parsed.getProperty ("Factory Info", {});
+        if (factory.isObject())
+            vendorOut = factory.getProperty ("Vendor", "").toString().trim();
+
+        auto classes = parsed.getProperty ("Classes", {});
+        if (auto* arr = classes.getArray())
+            for (const auto& cls : *arr)
+            {
+                if (cls.getProperty ("Category", "").toString() != "Audio Module Class")
+                    continue;
+                juce::String joined;
+                auto subs = cls.getProperty ("Sub Categories", {});
+                if (auto* subArr = subs.getArray())
+                    for (const auto& sc : *subArr)
+                        joined << sc.toString() << "|";
+                const int cat = categoryFromVst3Subcategories (joined);
+                if (cat >= 0) { categoryOut = cat; return; }
+            }
+        return;
+    }
+}
+
+int CaseFileProcessor::scanPluginFolders()
+{
+    juce::Array<juce::File> folders;
+    const auto userLib = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+                             .getChildFile ("Library/Audio/Plug-Ins");
+    folders.add (userLib.getChildFile ("VST3"));
+    folders.add (userLib.getChildFile ("Components"));
+    folders.add (juce::File ("/Library/Audio/Plug-Ins/VST3"));
+    folders.add (juce::File ("/Library/Audio/Plug-Ins/Components"));
+    return scanPluginFolders (folders);
+}
+
+int CaseFileProcessor::scanPluginFolders (const juce::Array<juce::File>& foldersToScan)
+{
+    // names already on file (case-insensitive) — never duplicate an entry the
+    // user may have annotated
+    juce::StringArray known;
+    for (auto p : pluginLib())
+        known.add (p.getProperty (ids::name).toString().trim().toLowerCase());
+
+    int added = 0;
+    for (const auto& folder : foldersToScan)
+    {
+        if (! folder.isDirectory()) continue;
+
+        juce::Array<juce::File> bundles;
+        folder.findChildFiles (bundles, juce::File::findFilesAndDirectories, true, "*.vst3");
+        folder.findChildFiles (bundles, juce::File::findFilesAndDirectories, true, "*.component");
+
+        for (const auto& bundle : bundles)
+        {
+            const auto name = bundle.getFileNameWithoutExtension().trim();
+            if (name.isEmpty() || known.contains (name.toLowerCase())) continue;
+            known.add (name.toLowerCase());
+
+            juce::String vendor;
+            int cat = -1;
+            if (bundle.hasFileExtension ("vst3"))
+                readVst3ModuleInfo (bundle, vendor, cat);
+            // vendors often nest bundles in a company subfolder — use it
+            if (vendor.isEmpty() && bundle.getParentDirectory() != folder)
+                vendor = bundle.getParentDirectory().getFileName();
+            if (cat < 0) cat = categoryFromName (name);
+            if (cat < 0) cat = pluginCategories().indexOf ("Other");
+
+            juce::ValueTree p (ids::PluginItem);
+            p.setProperty (ids::name, name, nullptr);
+            p.setProperty (ids::company, vendor, nullptr);
+            p.setProperty (ids::category, cat, nullptr);
+            p.setProperty (ids::favorite, false, nullptr);
+            p.setProperty (ids::ownership, 0, nullptr);
+            p.setProperty (ids::notes, "", nullptr);
+            p.setProperty (ids::bestUse, "", nullptr);
+            p.setProperty (ids::cpuHeavy, false, nullptr);
+            p.setProperty (ids::usedOften, false, nullptr);
+            pluginLib().appendChild (p, nullptr);
+            ++added;
+        }
+    }
+    if (added > 0) sendChangeMessage();
+    return added;
+}
+
+//==============================================================================
+// gear photos
+//==============================================================================
+juce::File CaseFileProcessor::gearPhotosFolder()
+{
+    return caseFileFolder().getChildFile ("Gear Photos");
+}
+
+juce::ValueTree CaseFileProcessor::addHardwarePhoto (juce::ValueTree gearItem, const juce::File& image)
+{
+    if (! gearItem.isValid() || ! image.existsAsFile()) return {};
+
+    auto photos = gearItem.getChildWithName (ids::Photos);
+    if (! photos.isValid())
+    {
+        photos = juce::ValueTree (ids::Photos);
+        gearItem.appendChild (photos, nullptr);
+    }
+
+    // archive a copy so recall photos survive the original moving/deleting
+    auto sanitize = [] (juce::String s)
+    {
+        s = s.trim().replaceCharacters (" /\\:*?\"<>|", "__________");
+        return s.isEmpty() ? juce::String ("Gear") : s;
+    };
+    auto folder = gearPhotosFolder();
+    folder.createDirectory();
+    auto target = folder.getChildFile (sanitize (gearItem.getProperty (ids::name).toString())
+                                       + "_" + juce::Time::getCurrentTime().formatted ("%Y%m%d_%H%M%S")
+                                       + "_" + juce::String (photos.getNumChildren())
+                                       + image.getFileExtension());
+    const auto stored = image.copyFileTo (target) ? target : image;
+
+    juce::ValueTree photo (ids::Photo);
+    photo.setProperty (ids::path, stored.getFullPathName(), nullptr);
+    photos.appendChild (photo, nullptr);
+    sendChangeMessage();
+    return photo;
+}
+
 juce::String CaseFileProcessor::hardwareCSV() const
 {
     juce::String s ("Name,Brand,Type,Stereo/Mono,Channels,Insert Path,Favorite,Favorite Use,Notes,Recall Notes\n");
