@@ -354,7 +354,7 @@ juce::String ClockerProcessor::buildReport (bool md) const
     const auto bul = md ? juce::String ("- ")  : juce::String ("  ");
     juce::String s;
 
-    s << h1 << "Sound Detective: Clocker — Time Report\n";
+    s << h1 << "Sound Detective: Clocker - Time Report\n";
     if (! md) s << "======================================\n";
     s << "\n" << h2 << "Project\n";
     s << bul << "Client: "   << proj.getProperty (ids::client).toString()   << "\n";
@@ -383,9 +383,9 @@ juce::String ClockerProcessor::buildReport (bool md) const
     for (auto e : entries())
     {
         s << bul << juce::Time ((juce::int64) e.getProperty (ids::start)).formatted ("%b %d")
-          << " — " << sessionTypes()[juce::jlimit (0, sessionTypes().size() - 1, (int) e.getProperty (ids::type))]
-          << " — " << ((bool) e.getProperty (ids::billable) ? "Billable" : "Non-Billable")
-          << " — " << formatDuration (e.getProperty (ids::durationMs));
+          << " - " << sessionTypes()[juce::jlimit (0, sessionTypes().size() - 1, (int) e.getProperty (ids::type))]
+          << " - " << ((bool) e.getProperty (ids::billable) ? "Billable" : "Non-Billable")
+          << " - " << formatDuration (e.getProperty (ids::durationMs));
         if ((bool) e.getProperty (ids::manual)) s << " (manual)";
         s << "\n";
         auto n = e.getProperty (ids::notes).toString().trim();

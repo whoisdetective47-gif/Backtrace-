@@ -213,12 +213,12 @@ ClockTab::ClockTab (ClockerProcessor& p) : ClockerTab (p)
     };
     addAndMakeVisible (typeBox);
 
-    theme::caption (notesCap, "FIELD NOTES — ATTACHED TO THIS ENTRY");
+    theme::caption (notesCap, "FIELD NOTES -- ATTACHED TO THIS ENTRY");
     addAndMakeVisible (notesCap);
     theme::styleEditor (notesEd, true);
     addAndMakeVisible (notesEd);
 
-    theme::caption (manualCap, "LATE ENTRY — ADD TIME BY HAND");
+    theme::caption (manualCap, "LATE ENTRY -- ADD TIME BY HAND");
     addAndMakeVisible (manualCap);
     for (auto* e : { &manualHoursEd, &manualMinsEd })
     {
@@ -281,12 +281,12 @@ void ClockTab::refresh()
 
     if (st == ClockerProcessor::ClockState::running && proc.isOnBreak())
     {
-        statusLabel.setText ("ON BREAK — OFF THE RECORD", juce::dontSendNotification);
+        statusLabel.setText ("ON BREAK -- OFF THE RECORD", juce::dontSendNotification);
         statusLabel.setColour (juce::Label::textColourId, theme::brass);
     }
     else if (st == ClockerProcessor::ClockState::running)
     {
-        statusLabel.setText ("ON THE CASE — CLOCKED IN", juce::dontSendNotification);
+        statusLabel.setText ("ON THE CASE -- CLOCKED IN", juce::dontSendNotification);
         statusLabel.setColour (juce::Label::textColourId, theme::approve);
     }
     else if (st == ClockerProcessor::ClockState::paused)
@@ -305,9 +305,9 @@ void ClockTab::refresh()
     auto client = proj.getProperty (ids::client).toString().trim();
     auto song   = proj.getProperty (ids::song).toString().trim();
     ctx << (client.isNotEmpty() ? client : juce::String ("UNASSIGNED"));
-    if (song.isNotEmpty()) ctx << "  •  " << song;
-    ctx << "  •  " << (proc.activeBillable() ? "BILLABLE" : "NON-BILLABLE")
-        << "  •  " << sessionTypes()[juce::jlimit (0, sessionTypes().size() - 1, proc.activeType())];
+    if (song.isNotEmpty()) ctx << "  //  " << song;
+    ctx << "  //  " << (proc.activeBillable() ? "BILLABLE" : "NON-BILLABLE")
+        << "  //  " << sessionTypes()[juce::jlimit (0, sessionTypes().size() - 1, proc.activeType())];
     contextLabel.setText (ctx, juce::dontSendNotification);
 
     const bool idle = (st == ClockerProcessor::ClockState::idle);

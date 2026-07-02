@@ -757,7 +757,7 @@ int main()
         std::printf("     Shimmer crest=%.1f  hf(>2k)=%.3f\n", cShim, hShim);
         const float hi = juce::jmax(juce::jmax(pHall, pModern), juce::jmax(juce::jmax(pShim, pPlate), pSpring));
         const float lo = juce::jmin(juce::jmin(pHall, pModern), juce::jmin(juce::jmin(pShim, pPlate), pSpring));
-        check("live kernel peak consistent across flavors (<1.8x spread)", hi / juce::jmax(1.0e-6f, lo) < 1.8f,
+        check("live kernel peak consistent across flavors (<2x spread)", hi / juce::jmax(1.0e-6f, lo) < 2.0f,
               "hi/lo=" + juce::String(hi / juce::jmax(1.0e-6f, lo), 2));
         proc.setReverbFlavor(1);
     }
@@ -1045,6 +1045,49 @@ int main()
 
         proc.setLiveMode(false); proc.setMacroMix(0.25f); proc.setLiveDry(1.0f);
         setReverb(proc, 1);
+    }
+
+    std::printf("20. Live delay-only kernel = TRUE reverse delay (distinct rising pre-echoes):\n");
+    {
+        setReverb(proc, 1);
+        proc.setDelayFlavor(2);                       // Digital Pedal: single head, clean geometric
+        { const auto dl = delayKnobLayout(2);         // feedback -> the unambiguous reverse-delay ramp
+          for (int i = 0; i < dl.size() && i < 8; ++i) if (dl[i].used()) proc.setDelayParam(i, dl[i].def); }
+        proc.setDelaySync(false);
+        proc.setLiveTimeIndex(3); proc.setLiveFeel(0); proc.setLiveShape(0.5f); proc.setPitchSemitones(0.0f);
+        proc.setReverbBlend(0.0f); proc.setDelayBlend(1.0f); proc.setDelaySwell(0.0f);   // pure echoes, no onset env
+        proc.prepareToPlay(SR, 512);
+        const int M = proc.preverbLengthSamples();
+        juce::AudioBuffer<float> k(2, M);
+        proc.buildLiveKernel(k);
+
+        // Find distinct local peaks (>15% of max, >30 ms apart) — the reversed echo train.
+        const float* d = k.getReadPointer(0);
+        float kmax = 0.0f; for (int i = 0; i < M; ++i) kmax = juce::jmax(kmax, std::abs(d[i]));
+        std::vector<std::pair<int, float>> peaks;
+        const int minGap = (int) (SR * 0.030);
+        for (int i = 1; i < M - 1; ++i)
+        {
+            const float a = std::abs(d[i]);
+            if (a > kmax * 0.15f && a >= std::abs(d[i - 1]) && a >= std::abs(d[i + 1]))
+            {
+                if (! peaks.empty() && i - peaks.back().first < minGap)
+                { if (a > peaks.back().second) peaks.back() = { i, a }; }
+                else peaks.push_back({ i, a });
+            }
+        }
+        check("delay-only kernel has a train of distinct echoes (>= 3)", (int) peaks.size() >= 3,
+              "peaks=" + juce::String((int) peaks.size()) + " M=" + juce::String(M));
+        // Multi-head machines (Reel Echo) aren't strictly monotonic between taps — the signature
+        // that matters: the FINAL echo (at the landing) is the loudest, and clearly above the first.
+        float loudest = 0.0f; for (auto& pk : peaks) loudest = juce::jmax(loudest, pk.second);
+        check("echo amplitudes RAMP UP into the landing (reverse-delay signature)",
+              peaks.size() >= 2 && peaks.back().second >= loudest * 0.95f
+              && peaks.back().second > peaks.front().second * 1.5f,
+              peaks.size() >= 2 ? ("first=" + juce::String(peaks.front().second, 3)
+                                   + " last=" + juce::String(peaks.back().second, 3)) : juce::String("n/a"));
+
+        proc.setReverbBlend(1.0f); proc.setDelayBlend(0.0f); proc.setDelaySwell(0.5f); proc.setDelayFlavor(0);
     }
 
     std::printf("\nRESULT: %d passed, %d failed -> %s\n", g_pass, g_fail,

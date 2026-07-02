@@ -1302,56 +1302,6 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
     for (int c = 0; c < ch; ++c)                           // reverse → preverb (quiet build-up → loud landing)
         std::reverse(ir.getWritePointer(c), ir.getWritePointer(c) + M);
 
-    // DELAY LAYER (same design as the printed swell): a reversed delay tail with its own bloom
-    // onset (Delay Swell) blended in (Delay/Reverb Blend). Delay Blend 0 (default) skips this
-    // entirely → the ear-validated reverb-only kernel is untouched. The shared tone/Shape/crest/L2
-    // stages below then process the MIX, so both layers share one voice.
-    {
-        const float db = delayBlendAmt.load();
-        if (db > 0.001f && delayFlavor.load() != 0)
-        {
-            juce::AudioBuffer<float> ir2(ch, M);
-            ir2.clear();
-            for (int c = 0; c < ch; ++c) ir2.setSample(c, 0, 1.0f);
-            // Clamp Time to the window so >= ~3.5 repeats always fit (long TIME settings keep the
-            // user's Time untouched — the clamp only bites when the window is shorter than it).
-            applyDelay(ir2, M, /*wetOnly*/ true, mSec, (float) (mSec * 1000.0 / 3.5));
-            for (int c = 0; c < ch; ++c)
-                std::reverse(ir2.getWritePointer(c), ir2.getWritePointer(c) + M);
-            const float rb   = juce::jmax(0.05f, reverbBlendAmt.load());
-            const float sw   = delaySwellPos.load();
-            const bool  flat = sw < 0.02f;                 // 0 = repeats across the whole window
-            const float s0   = 0.72f * sw;
-            const float pw   = 1.0f + 2.5f * sw;
-            auto kEnv = [&](int i) -> float
-            {
-                if (flat) return 1.0f;
-                const float x  = (float) i / (float) juce::jmax(1, M - 1);
-                const float u  = x <= s0 ? 0.0f : (x - s0) / (1.0f - s0);
-                const float ss = u * u * (3.0f - 2.0f * u);
-                return std::pow(ss, pw);
-            };
-            // Energy-match the sparse echo kernel to the dense reverb kernel (same fix as the
-            // printed swell) so Blend is a real balance in live mode too.
-            double e1 = 0.0, e2 = 0.0;
-            for (int c = 0; c < ch; ++c)
-            {
-                const float* d = ir.getReadPointer(c); const float* d2 = ir2.getReadPointer(c);
-                for (int i = 0; i < M; ++i)
-                { e1 += (double) d[i] * d[i]; const double v = d2[i] * kEnv(i); e2 += v * v; }
-            }
-            const float match = (e1 > 1.0e-12 && e2 > 1.0e-12)
-                              ? juce::jlimit(0.25f, 16.0f, (float) std::sqrt(e1 / e2)) : 1.0f;
-            for (int c = 0; c < ch; ++c)
-            {
-                float* d = ir.getWritePointer(c);
-                const float* d2 = ir2.getReadPointer(c);
-                for (int i = 0; i < M; ++i)
-                    d[i] = d[i] * rb + d2[i] * kEnv(i) * db * match;
-            }
-        }
-    }
-
     // Shape: gentle FIXED tone (HPF de-mud + soft LPF — NO sweep) + an exponential BUILD-UP
     // envelope so the swell always grows into the landing (the reverb gives the texture, this
     // gives the shape). The reverb's own HF damping already blooms dark→bright naturally.
@@ -1396,6 +1346,94 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
         }
     }
 
+    // CREST CONTROL — REVERB LAYER ONLY (before the delay mix): a dense reverb reverses into a
+    // PEAKY kernel (loud landing, thin body); since we L2-normalise energy, a peaky kernel reads
+    // much quieter than a spread one. Soft-limit its peaks (~24× RMS) so flavors loudness-match.
+    // The DELAY layer is deliberately excluded — its spike RAMP (quiet…loud into the hit) IS the
+    // reverse-delay signature and must never be flattened.
+    {
+        double eSum = 0.0;
+        for (int c = 0; c < ch; ++c)
+        { const float* d = ir.getReadPointer(c); for (int i = 0; i < M; ++i) eSum += (double) d[i] * (double) d[i]; }
+        const float rms = (float) std::sqrt(eSum / juce::jmax(1, ch * M));
+        const float thr = rms * 24.0f;                            // gentle ceiling → keeps the wash lush
+        if (thr > 1.0e-9f)
+            for (int c = 0; c < ch; ++c)
+            {
+                float* d = ir.getWritePointer(c);
+                for (int i = 0; i < M; ++i)
+                    d[i] = thr * std::tanh(d[i] / thr);           // smooth saturation: body ≈ linear, peaks capped
+            }
+    }
+
+    // DELAY LAYER — mixed in AFTER the Shape/tone stage, deliberately: the reverb's exponential
+    // build-up envelope CRUSHED the pre-echoes (every repeat except the last fell below
+    // audibility → "just a slight delay"). The reversed feedback ramp is already the true
+    // reverse-delay shape — quiet…louder…loudest, straight into the hit — so the layer keeps it,
+    // with only a light matching tone and its own Delay Swell onset. Delay Blend 0 = untouched.
+    {
+        const float db = delayBlendAmt.load();
+        if (db > 0.001f && delayFlavor.load() != 0)
+        {
+            juce::AudioBuffer<float> ir2(ch, M);
+            ir2.clear();
+            for (int c = 0; c < ch; ++c) ir2.setSample(c, 0, 1.0f);
+            // Clamp Time to the window so >= ~3.5 repeats always fit (long TIME settings keep the
+            // user's Time untouched — the clamp only bites when the window is shorter than it).
+            applyDelay(ir2, M, /*wetOnly*/ true, mSec, (float) (mSec * 1000.0 / 3.5));
+            for (int c = 0; c < ch; ++c)
+                std::reverse(ir2.getWritePointer(c), ir2.getWritePointer(c) + M);
+
+            const float rb   = juce::jmax(0.05f, reverbBlendAmt.load());
+            const float sw   = delaySwellPos.load();
+            const bool  flat = sw < 0.02f;                 // 0 = repeats across the whole window
+            const float s0   = 0.72f * sw;
+            const float pw   = 1.0f + 2.5f * sw;
+            auto kEnv = [&](int i) -> float
+            {
+                if (flat) return 1.0f;
+                const float x  = (float) i / (float) juce::jmax(1, M - 1);
+                const float u  = x <= s0 ? 0.0f : (x - s0) / (1.0f - s0);
+                const float ss = u * u * (3.0f - 2.0f * u);
+                return std::pow(ss, pw);
+            };
+            // Light matching tone only (de-mud HPF + gentle LPF) — NO build-up envelope, the
+            // echoes must stay distinct all the way back.
+            const float aHp2 = (float) std::exp(-2.0 * juce::MathConstants<double>::pi * 110.0 / juce::jmax(1.0, currentSR));
+            const float aLp2 = 1.0f - (float) std::exp(-2.0 * juce::MathConstants<double>::pi * 9000.0 / juce::jmax(1.0, currentSR));
+            for (int c = 0; c < ch; ++c)
+            {
+                float* d2 = ir2.getWritePointer(c);
+                float hpZ = 0.0f, lpZ = 0.0f;
+                for (int i = 0; i < M; ++i)
+                {
+                    float x = d2[i];
+                    hpZ = aHp2 * hpZ + (1.0f - aHp2) * x; x = x - hpZ;
+                    lpZ += aLp2 * (x - lpZ);              x = lpZ;
+                    d2[i] = x * kEnv(i);
+                }
+            }
+            // Energy-match the sparse echo layer to the SHAPED reverb layer so Blend is a true
+            // balance (same fix as the printed swell).
+            double e1 = 0.0, e2 = 0.0;
+            for (int c = 0; c < ch; ++c)
+            {
+                const float* d = ir.getReadPointer(c); const float* d2 = ir2.getReadPointer(c);
+                for (int i = 0; i < M; ++i)
+                { e1 += (double) d[i] * d[i]; e2 += (double) d2[i] * d2[i]; }
+            }
+            const float match = (e1 > 1.0e-12 && e2 > 1.0e-12)
+                              ? juce::jlimit(0.25f, 16.0f, (float) std::sqrt(e1 / e2)) : 1.0f;
+            for (int c = 0; c < ch; ++c)
+            {
+                float* d = ir.getWritePointer(c);
+                const float* d2 = ir2.getReadPointer(c);
+                for (int i = 0; i < M; ++i)
+                    d[i] = d[i] * rb + d2[i] * db * match;
+            }
+        }
+    }
+
     // Mono-safe stereo: high-pass the SIDE so lows stay centred (mono-compatible) and only the
     // highs spread wide — the pro reverb-width move (no hollow/phasey collapse in mono).
     if (ch == 2)
@@ -1421,26 +1459,6 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
         float* d = ir.getWritePointer(c);
         for (int i = 0; i < fin;  ++i) { const float g = (float) i / (float) fin; d[i] *= g * g; }
         for (int i = 0; i < fout; ++i) d[M - 1 - i] *= (float) i / (float) fout;
-    }
-
-    // CREST CONTROL (loudness-match across reverb flavors): a dense reverb reverses into a
-    // PEAKY kernel (loud landing, thin body); a diffuse one spreads. Since we L2-normalise
-    // energy, a peaky kernel ends up with a quiet body → it reads much quieter than a spread
-    // one at the same energy. Soft-limit the peaks (above ~18× the kernel RMS) so the energy
-    // lives in the body, then normalise → every flavor lands at a consistent PERCEIVED level.
-    {
-        double eSum = 0.0;
-        for (int c = 0; c < ch; ++c)
-        { const float* d = ir.getReadPointer(c); for (int i = 0; i < M; ++i) eSum += (double) d[i] * (double) d[i]; }
-        const float rms = (float) std::sqrt(eSum / juce::jmax(1, ch * M));
-        const float thr = rms * 24.0f;                            // peak ceiling relative to body (gentle → keeps the wash lush)
-        if (thr > 1.0e-9f)
-            for (int c = 0; c < ch; ++c)
-            {
-                float* d = ir.getWritePointer(c);
-                for (int i = 0; i < M; ++i)
-                    d[i] = thr * std::tanh(d[i] / thr);           // smooth saturation: body ≈ linear, peaks capped
-            }
     }
 
     // GAIN: L2 (energy) normalise → a CONSISTENT, usable wet level (≈ input level for
