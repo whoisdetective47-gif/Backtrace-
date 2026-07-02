@@ -137,6 +137,39 @@ int main()
     check (p3.activeType() == 4 && p3.activeBillable(),
            "back on the case with previous type/billable restored");
 
+    // --- backdated entries & date parsing ---------------------------------------
+    const auto now = juce::Time::currentTimeMillis();
+    check (parseDateMD ("", now) == now, "blank date = today");
+    check (parseDateMD ("banana", now) == 0, "garbage date rejected");
+    const auto jun30 = parseDateMD ("6/30", now);
+    check (jun30 > 0 && juce::Time (jun30).getDayOfMonth() == 30
+                     && juce::Time (jun30).getMonth() == 5, "\"6/30\" parses to June 30");
+    check (jun30 < now, "parsed past date is in the past");
+
+    ClockerProcessor p4;
+    p4.addManualEntry (30 * 60000LL, true, 4, "today");                       // today
+    p4.addManualEntry (3 * 3600000LL, true, 2, "edits from the other day",    // backdated
+                       parseDateMD ("6/30", now));
+    check (p4.entries().getNumChildren() == 2, "backdated entry logged");
+    auto first = p4.entries().getChild (0);
+    check (first.getProperty (ids::notes).toString() == "edits from the other day",
+           "ledger stays chronological (backdated entry sorts first)");
+    check (juce::Time ((juce::int64) first.getProperty (ids::start)).getDayOfMonth() == 30,
+           "backdated entry lands on June 30");
+
+    // --- outstanding balance -----------------------------------------------------
+    p4.project().setProperty (ids::projectType, 0, nullptr);
+    p4.project().setProperty (ids::hourlyRate, 100.0, nullptr);
+    p4.project().setProperty (ids::priorBalance, 135.0, nullptr);
+    auto t4 = p4.computeTotals();
+    check (std::abs (t4.amount - 350.0) < 0.5, "tracked billing = $350 (3.5h @ $100)");
+    check (std::abs (t4.priorBalance - 135.0) < 0.01, "outstanding balance carried in");
+    check (std::abs (t4.totalDue - 485.0) < 0.5, "TOTAL DUE = billing + balance ("
+                                                  + formatMoney (t4.totalDue) + ")");
+    check (p4.buildReport (false).contains ("TOTAL DUE"), "report shows TOTAL DUE");
+    auto j4 = juce::JSON::parse (p4.buildJSON());
+    check ((double) j4["totals"]["totalDue"] > 484.0, "JSON exports totalDue");
+
     std::cout << "\n" << (failures == 0 ? "ALL TESTS PASSED" : juce::String (failures) + " FAILURES")
               << std::endl;
     return failures == 0 ? 0 : 1;

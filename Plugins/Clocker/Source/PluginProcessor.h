@@ -20,7 +20,7 @@ namespace ids
     // project / client
     CLKR_ID(client) CLKR_ID(project) CLKR_ID(song) CLKR_ID(engineer)
     CLKR_ID(projectType) CLKR_ID(hourlyRate) CLKR_ID(flatFee)
-    CLKR_ID(billingNotes) CLKR_ID(invoiceNotes)
+    CLKR_ID(billingNotes) CLKR_ID(invoiceNotes) CLKR_ID(priorBalance)
     // settings
     CLKR_ID(defaultRate) CLKR_ID(defaultBillable) CLKR_ID(defaultType)
     CLKR_ID(rounding) CLKR_ID(timeFormat)
@@ -43,6 +43,11 @@ juce::String formatHours(juce::int64 ms);                       // 2.25 h
 juce::String formatMoney(double amount);                        // $1,500.00
 juce::String formatDate(juce::int64 epochMs);                   // Jul 02 14:30
 
+// Parses "6/30", "06/30", "6/30/26" etc. into an epoch at noon of that day.
+// Empty text returns nowMs (= today); unparseable text returns 0.
+// A month/day with no year that lands in the future rolls back one year.
+juce::int64 parseDateMD (const juce::String& text, juce::int64 nowMs);
+
 struct Totals
 {
     juce::int64 totalMs = 0, billableMs = 0, nonBillableMs = 0;
@@ -50,8 +55,10 @@ struct Totals
     juce::int64 typeMs[16] = {};
     int    projectType   = 0;
     double hourlyRate    = 0.0, flatFee = 0.0;
-    double amount        = 0.0;                   // estimated billing
+    double amount        = 0.0;                   // estimated billing (tracked work)
     double effectiveRate = 0.0;                   // amount / total hours
+    double priorBalance  = 0.0;                   // carried-in outstanding balance
+    double totalDue      = 0.0;                   // amount + priorBalance
 };
 } // namespace clocker
 
@@ -85,8 +92,9 @@ public:
     void startBreak (const juce::String& notesForCurrentEntry);
     void endBreak();                     // resumes previous type/billable state
 
+    // endMs <= 0 means "ends now"; pass a past timestamp to backdate the entry
     void addManualEntry (juce::int64 durMs, bool billable, int type,
-                         const juce::String& notes);
+                         const juce::String& notes, juce::int64 endMs = 0);
 
     //=== data =================================================================
     juce::ValueTree state { clocker::ids::Clocker };

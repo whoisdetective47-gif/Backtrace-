@@ -61,6 +61,25 @@ juce::String clocker::formatDate (juce::int64 epochMs)
     return juce::Time (epochMs).formatted ("%b %d %H:%M");
 }
 
+juce::int64 clocker::parseDateMD (const juce::String& text, juce::int64 nowMs)
+{
+    auto s = text.trim();
+    if (s.isEmpty()) return nowMs;
+    auto parts = juce::StringArray::fromTokens (s, "/-. ", "");
+    parts.removeEmptyStrings();
+    if (parts.size() < 2) return 0;
+    const int m = parts[0].getIntValue();
+    const int d = parts[1].getIntValue();
+    if (m < 1 || m > 12 || d < 1 || d > 31) return 0;
+    const juce::Time now (nowMs);
+    int y = parts.size() >= 3 ? parts[2].getIntValue() : now.getYear();
+    if (y < 100) y += 2000;
+    juce::Time t (y, m - 1, d, 12, 0);                 // noon of that day
+    if (parts.size() < 3 && t.toMilliseconds() > nowMs + 24LL * 3600000)
+        t = juce::Time (y - 1, m - 1, d, 12, 0);       // "12/28" typed in January
+    return t.toMilliseconds();
+}
+
 //==============================================================================
 ClockerProcessor::ClockerProcessor()
     : AudioProcessor (BusesProperties()
@@ -92,6 +111,7 @@ void ClockerProcessor::ensureStructure()
     setIfMissing (proj, ids::flatFee,      0.0);
     setIfMissing (proj, ids::billingNotes, "");
     setIfMissing (proj, ids::invoiceNotes, "");
+    setIfMissing (proj, ids::priorBalance, 0.0);
 
     auto set = getOrAdd (ids::Settings);
     setIfMissing (set, ids::defaultRate,     100.0);
@@ -234,11 +254,11 @@ void ClockerProcessor::endBreak()
 }
 
 void ClockerProcessor::addManualEntry (juce::int64 durMs, bool billable, int type,
-                                       const juce::String& notes)
+                                       const juce::String& notes, juce::int64 endMs)
 {
     if (durMs <= 0) return;
-    const auto now = juce::Time::currentTimeMillis();
-    appendEntry (now - durMs, now, durMs, billable, type, notes, true);
+    const auto end = endMs > 0 ? endMs : juce::Time::currentTimeMillis();
+    appendEntry (end - durMs, end, durMs, billable, type, notes, true);
     sendChangeMessage();
 }
 
@@ -253,7 +273,16 @@ void ClockerProcessor::appendEntry (juce::int64 start, juce::int64 end, juce::in
     e.setProperty (ids::type,       type,     nullptr);
     e.setProperty (ids::notes,      notes,    nullptr);
     e.setProperty (ids::manual,     manual,   nullptr);
-    entries().appendChild (e, nullptr);
+    // insert in date order so backdated entries keep the ledger chronological
+    auto ent = entries();
+    int idx = ent.getNumChildren();
+    for (int i = 0; i < ent.getNumChildren(); ++i)
+        if ((juce::int64) ent.getChild (i).getProperty (ids::start) > start)
+        {
+            idx = i;
+            break;
+        }
+    ent.addChild (e, idx, nullptr);
 }
 
 void ClockerProcessor::resetProject()
@@ -266,6 +295,7 @@ void ClockerProcessor::resetProject()
                      &ids::billingNotes, &ids::invoiceNotes })
         proj.setProperty (*p, "", nullptr);
     proj.setProperty (ids::flatFee, 0.0, nullptr);
+    proj.setProperty (ids::priorBalance, 0.0, nullptr);
     proj.setProperty (ids::hourlyRate, settings().getProperty (ids::defaultRate, 100.0), nullptr);
     sendChangeMessage();
 }
@@ -321,6 +351,8 @@ Totals ClockerProcessor::computeTotals() const
     }
     if (t.totalMs > 0)
         t.effectiveRate = t.amount / (t.totalMs / 3600000.0);
+    t.priorBalance = (double) proj.getProperty (ids::priorBalance, 0.0);
+    t.totalDue     = t.amount + t.priorBalance;
     return t;
 }
 
@@ -377,6 +409,11 @@ juce::String ClockerProcessor::buildReport (bool md) const
     {
         s << bul << "Estimated Billing: "     << formatMoney (t.amount) << "\n";
         s << bul << "Effective Hourly Rate: " << formatMoney (t.effectiveRate) << "/hr\n";
+    }
+    if (t.priorBalance != 0.0)
+    {
+        s << bul << "Outstanding Balance (carried in): " << formatMoney (t.priorBalance) << "\n";
+        s << bul << "TOTAL DUE: " << formatMoney (t.totalDue) << "\n";
     }
 
     s << "\n" << h2 << "Time Log\n";
@@ -463,6 +500,8 @@ juce::String ClockerProcessor::buildJSON() const
     tot->setProperty ("roundingMinutes",   roundingMinutes());
     tot->setProperty ("estimatedBilling",  t.amount);
     tot->setProperty ("effectiveHourlyRate", t.effectiveRate);
+    tot->setProperty ("priorBalance",      t.priorBalance);
+    tot->setProperty ("totalDue",          t.totalDue);
     root->setProperty ("totals", juce::var (tot));
 
     juce::Array<juce::var> arr;

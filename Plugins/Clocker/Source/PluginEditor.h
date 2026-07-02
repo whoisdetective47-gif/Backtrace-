@@ -72,7 +72,7 @@ private:
     juce::ToggleButton billableToggle { "Billable" };
     juce::ComboBox typeBox;
     juce::TextEditor notesEd;
-    juce::TextEditor manualHoursEd, manualMinsEd;
+    juce::TextEditor manualDateEd, manualHoursEd, manualMinsEd;
     juce::TextButton manualAddBtn { "ADD" },
                      add15Btn { "+15M" }, add30Btn { "+30M" }, add60Btn { "+1H" };
 };
@@ -93,8 +93,8 @@ private:
     void deleteSelected();
 
     juce::ListBox list { "entries", this };
-    juce::Label editCap, hoursCap, minsCap, notesCap2;
-    juce::TextEditor hoursEd, minsEd, notesEd;
+    juce::Label editCap, hoursCap, minsCap, dateCap2, notesCap2;
+    juce::TextEditor hoursEd, minsEd, dateEd, notesEd;
     juce::ToggleButton billableToggle { "Billable" };
     juce::ComboBox typeBox;
     juce::TextButton saveBtn { "SAVE" }, deleteBtn { "DELETE" };
@@ -110,9 +110,9 @@ public:
 private:
     void bindText   (juce::TextEditor&, const juce::Identifier&);
     void bindDouble (juce::TextEditor&, const juce::Identifier&);
-    juce::Label caps[9];
+    juce::Label caps[10];
     juce::TextEditor clientEd, projectEd, songEd, engineerEd,
-                     rateEd, feeEd, billingNotesEd, invoiceNotesEd;
+                     rateEd, feeEd, balanceEd, billingNotesEd, invoiceNotesEd;
     juce::ComboBox projectTypeBox;
     juce::TextButton resetBtn { "CLOSE CASE / NEW PROJECT" };
 };

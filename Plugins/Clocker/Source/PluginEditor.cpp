@@ -218,8 +218,14 @@ ClockTab::ClockTab (ClockerProcessor& p) : ClockerTab (p)
     theme::styleEditor (notesEd, true);
     addAndMakeVisible (notesEd);
 
-    theme::caption (manualCap, "LATE ENTRY -- ADD TIME BY HAND");
+    theme::caption (manualCap, "LATE ENTRY -- DATE + TIME BY HAND (BLANK DATE = TODAY)");
     addAndMakeVisible (manualCap);
+    theme::styleEditor (manualDateEd);
+    manualDateEd.setFont (theme::mono (15.0f));
+    manualDateEd.setInputRestrictions (10, "0123456789/");
+    manualDateEd.setTextToShowWhenEmpty ("M/D", theme::inkDim);
+    manualDateEd.setSelectAllWhenFocused (true);
+    addAndMakeVisible (manualDateEd);
     for (auto* e : { &manualHoursEd, &manualMinsEd })
     {
         theme::styleEditor (*e);
@@ -265,10 +271,18 @@ ClockTab::ClockTab (ClockerProcessor& p) : ClockerTab (p)
 void ClockTab::addManualMinutes (juce::int64 minutes)
 {
     if (minutes <= 0) return;
+    const auto endMs = parseDateMD (manualDateEd.getText(), juce::Time::currentTimeMillis());
+    if (endMs == 0)   // unreadable date — flag it instead of logging the wrong day
+    {
+        manualDateEd.grabKeyboardFocus();
+        manualDateEd.selectAll();
+        return;
+    }
     proc.addManualEntry (minutes * 60000, billableToggle.getToggleState(),
                          juce::jmax (0, typeBox.getSelectedId() - 1),
-                         notesEd.getText().trim());
+                         notesEd.getText().trim(), endMs);
     notesEd.clear();
+    manualDateEd.clear();
 }
 
 void ClockTab::refresh()
@@ -390,6 +404,8 @@ void ClockTab::resized()
     manualCap.setBounds (r.removeFromTop (16));
     r.removeFromTop (2);
     auto mrow = r.removeFromTop (30);
+    manualDateEd.setBounds  (mrow.removeFromLeft (72));
+    mrow.removeFromLeft (10);
     manualHoursEd.setBounds (mrow.removeFromLeft (58));
     colonLabel.setBounds    (mrow.removeFromLeft (14));
     manualMinsEd.setBounds  (mrow.removeFromLeft (58));
@@ -415,9 +431,16 @@ TimeLogTab::TimeLogTab (ClockerProcessor& p) : ClockerTab (p)
     theme::caption (editCap, "SELECTED ENTRY");
     theme::caption (hoursCap, "H");
     theme::caption (minsCap,  "M");
+    theme::caption (dateCap2, "DATE");
     theme::caption (notesCap2, "NOTES");
-    for (auto* c : { &editCap, &hoursCap, &minsCap, &notesCap2 })
+    for (auto* c : { &editCap, &hoursCap, &minsCap, &dateCap2, &notesCap2 })
         addAndMakeVisible (c);
+
+    theme::styleEditor (dateEd);
+    dateEd.setFont (theme::mono (14.0f));
+    dateEd.setInputRestrictions (10, "0123456789/");
+    dateEd.setSelectAllWhenFocused (true);
+    addAndMakeVisible (dateEd);
 
     for (auto* e : { &hoursEd, &minsEd })
     {
@@ -493,6 +516,7 @@ void TimeLogTab::selectedRowsChanged (int)
     const juce::int64 d = e.getProperty (ids::durationMs);
     hoursEd.setText (juce::String ((int) (d / 3600000)), false);
     minsEd.setText (juce::String ((int) ((d / 60000) % 60)), false);
+    dateEd.setText (juce::Time ((juce::int64) e.getProperty (ids::start)).formatted ("%m/%d"), false);
     billableToggle.setToggleState ((bool) e.getProperty (ids::billable), juce::dontSendNotification);
     typeBox.setSelectedId ((int) e.getProperty (ids::type) + 1, juce::dontSendNotification);
     notesEd.setText (e.getProperty (ids::notes).toString(), false);
@@ -505,6 +529,17 @@ void TimeLogTab::saveSelected()
     const juce::int64 ms = ((juce::int64) hoursEd.getText().getIntValue() * 60
                             + minsEd.getText().getIntValue()) * 60000;
     e.setProperty (ids::durationMs, juce::jmax ((juce::int64) 60000, ms), nullptr);
+
+    // move the entry to a new day if the date field was edited to a valid M/D
+    const auto oldStart = (juce::int64) e.getProperty (ids::start);
+    if (dateEd.getText().trim().isNotEmpty())
+    {
+        const auto parsed = parseDateMD (dateEd.getText(), juce::Time::currentTimeMillis());
+        if (parsed > 0
+            && juce::Time (parsed).formatted ("%Y-%m-%d")
+                   != juce::Time (oldStart).formatted ("%Y-%m-%d"))
+            e.setProperty (ids::start, parsed, nullptr);
+    }
     e.setProperty (ids::end, (juce::int64) e.getProperty (ids::start)
                                  + (juce::int64) e.getProperty (ids::durationMs), nullptr);
     e.setProperty (ids::billable, billableToggle.getToggleState(), nullptr);
@@ -550,6 +585,9 @@ void TimeLogTab::resized()
 
     edit.removeFromTop (6);
     auto row2 = edit.removeFromTop (28);
+    dateCap2.setBounds (row2.removeFromLeft (36));
+    dateEd.setBounds (row2.removeFromLeft (72));
+    row2.removeFromLeft (12);
     notesCap2.setBounds (row2.removeFromLeft (50));
     notesEd.setBounds (row2);
 }
@@ -559,16 +597,17 @@ void TimeLogTab::resized()
 //==============================================================================
 ClientTab::ClientTab (ClockerProcessor& p) : ClockerTab (p)
 {
-    const char* names[9] = { "CLIENT NAME", "PROJECT NAME", "SONG TITLE", "ENGINEER NAME",
-                             "PROJECT TYPE", "HOURLY RATE ($/HR)", "FLAT PROJECT FEE ($)",
-                             "BILLING NOTES", "INVOICE NOTES" };
-    for (int i = 0; i < 9; ++i)
+    const char* names[10] = { "CLIENT NAME", "PROJECT NAME", "SONG TITLE", "ENGINEER NAME",
+                              "PROJECT TYPE", "HOURLY RATE ($/HR)", "FLAT PROJECT FEE ($)",
+                              "OUTSTANDING BALANCE ($) -- OWED FROM BEFORE",
+                              "BILLING NOTES", "INVOICE NOTES" };
+    for (int i = 0; i < 10; ++i)
     {
         theme::caption (caps[i], names[i]);
         addAndMakeVisible (caps[i]);
     }
 
-    for (auto* e : { &clientEd, &projectEd, &songEd, &engineerEd, &rateEd, &feeEd })
+    for (auto* e : { &clientEd, &projectEd, &songEd, &engineerEd, &rateEd, &feeEd, &balanceEd })
     {
         theme::styleEditor (*e);
         addAndMakeVisible (e);
@@ -580,6 +619,7 @@ ClientTab::ClientTab (ClockerProcessor& p) : ClockerTab (p)
     }
     rateEd.setInputRestrictions (10, "0123456789.");
     feeEd.setInputRestrictions (10, "0123456789.");
+    balanceEd.setInputRestrictions (11, "-0123456789.");   // minus allows a credit
 
     bindText (clientEd,   ids::client);
     bindText (projectEd,  ids::project);
@@ -589,6 +629,7 @@ ClientTab::ClientTab (ClockerProcessor& p) : ClockerTab (p)
     bindText (invoiceNotesEd, ids::invoiceNotes);
     bindDouble (rateEd, ids::hourlyRate);
     bindDouble (feeEd,  ids::flatFee);
+    bindDouble (balanceEd, ids::priorBalance);
 
     for (int i = 0; i < projectTypes().size(); ++i)
         projectTypeBox.addItem (projectTypes()[i], i + 1);
@@ -639,6 +680,7 @@ void ClientTab::refresh()
     set (engineerEd, proj.getProperty (ids::engineer).toString());
     set (rateEd,     juce::String ((double) proj.getProperty (ids::hourlyRate, 0.0), 2));
     set (feeEd,      juce::String ((double) proj.getProperty (ids::flatFee, 0.0), 2));
+    set (balanceEd,  juce::String ((double) proj.getProperty (ids::priorBalance, 0.0), 2));
     set (billingNotesEd, proj.getProperty (ids::billingNotes).toString());
     set (invoiceNotesEd, proj.getProperty (ids::invoiceNotes).toString());
     projectTypeBox.setSelectedId ((int) proj.getProperty (ids::projectType, 0) + 1,
@@ -667,14 +709,14 @@ void ClientTab::resized()
     place (right, caps[4], projectTypeBox);
     place (right, caps[5], rateEd);
     place (right, caps[6], feeEd);
-    right.removeFromTop (16);
-    resetBtn.setBounds (right.removeFromTop (32));
+    place (right, caps[7], balanceEd);
+    resetBtn.setBounds (right.removeFromTop (30));
 
     left.removeFromTop (4);
-    caps[7].setBounds (left.removeFromTop (16));
+    caps[8].setBounds (left.removeFromTop (16));
     billingNotesEd.setBounds (left.removeFromTop (juce::jmax (40, left.getHeight() - 4)));
-    right.removeFromTop (14);
-    caps[8].setBounds (right.removeFromTop (16));
+    right.removeFromTop (12);
+    caps[9].setBounds (right.removeFromTop (16));
     invoiceNotesEd.setBounds (right.removeFromTop (juce::jmax (40, right.getHeight() - 4)));
 }
 
@@ -721,6 +763,11 @@ void ProfitTab::refresh()
     {
         s << "Estimated Billing:   " << formatMoney (t.amount) << "\n";
         s << "Effective Rate:      " << formatMoney (t.effectiveRate) << "/hr (vs total time)\n";
+    }
+    if (t.priorBalance != 0.0)
+    {
+        s << "Outstanding Balance: " << formatMoney (t.priorBalance) << " (carried in)\n";
+        s << "TOTAL DUE:           " << formatMoney (t.totalDue) << "\n";
     }
     s << "\nTIME BY SESSION TYPE\n--------------------\n";
     for (int i = 0; i < sessionTypes().size(); ++i)
