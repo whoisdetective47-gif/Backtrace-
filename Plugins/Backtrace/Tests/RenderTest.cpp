@@ -879,9 +879,9 @@ int main()
         proc.setDelayBlend(1.0f); proc.setReverbBlend(0.0f);
         int landB = 0; auto trail = createSwell(proc, tmp, landB, sr);
         const double postRms = rms(trail, landB + (int) (SR * 0.05), landB + (int) (SR * 1.0));
-        check("delay repeats trail past the landing (no hard cut)",
-              trail.getNumSamples() > landB + (int) (SR * 0.3) && postRms > 0.01,
-              "len=" + juce::String(trail.getNumSamples()) + " land=" + juce::String(landB)
+        check("delay repeats trail LONG past the landing (no hard cut)",
+              trail.getNumSamples() > landB + (int) (SR * 3.2) && postRms > 0.01,
+              "trail=" + juce::String((trail.getNumSamples() - landB) / SR, 2) + " s"
               + " postRms=" + juce::String(postRms, 4));
         proc.setReverbBlend(1.0f);
 

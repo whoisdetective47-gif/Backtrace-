@@ -1274,21 +1274,36 @@ void BacktraceProcessor::buildLiveKernel(juce::AudioBuffer<float>& ir)
             applyDelay(ir2, M, /*wetOnly*/ true, mSec);
             for (int c = 0; c < ch; ++c)
                 std::reverse(ir2.getWritePointer(c), ir2.getWritePointer(c) + M);
-            const float rb = juce::jmax(0.05f, reverbBlendAmt.load());
-            const float sw = delaySwellPos.load();
-            const float s0 = 0.10f + 0.65f * sw;
-            const float pw = 1.0f  + 2.0f  * sw;
+            const float rb   = juce::jmax(0.05f, reverbBlendAmt.load());
+            const float sw   = delaySwellPos.load();
+            const bool  flat = sw < 0.02f;                 // 0 = repeats across the whole window
+            const float s0   = 0.72f * sw;
+            const float pw   = 1.0f + 2.5f * sw;
+            auto kEnv = [&](int i) -> float
+            {
+                if (flat) return 1.0f;
+                const float x  = (float) i / (float) juce::jmax(1, M - 1);
+                const float u  = x <= s0 ? 0.0f : (x - s0) / (1.0f - s0);
+                const float ss = u * u * (3.0f - 2.0f * u);
+                return std::pow(ss, pw);
+            };
+            // Energy-match the sparse echo kernel to the dense reverb kernel (same fix as the
+            // printed swell) so Blend is a real balance in live mode too.
+            double e1 = 0.0, e2 = 0.0;
+            for (int c = 0; c < ch; ++c)
+            {
+                const float* d = ir.getReadPointer(c); const float* d2 = ir2.getReadPointer(c);
+                for (int i = 0; i < M; ++i)
+                { e1 += (double) d[i] * d[i]; const double v = d2[i] * kEnv(i); e2 += v * v; }
+            }
+            const float match = (e1 > 1.0e-12 && e2 > 1.0e-12)
+                              ? juce::jlimit(0.25f, 16.0f, (float) std::sqrt(e1 / e2)) : 1.0f;
             for (int c = 0; c < ch; ++c)
             {
                 float* d = ir.getWritePointer(c);
                 const float* d2 = ir2.getReadPointer(c);
                 for (int i = 0; i < M; ++i)
-                {
-                    const float x  = (float) i / (float) juce::jmax(1, M - 1);
-                    const float u  = x <= s0 ? 0.0f : (x - s0) / (1.0f - s0);
-                    const float ss = u * u * (3.0f - 2.0f * u);
-                    d[i] = d[i] * rb + d2[i] * db * std::pow(ss, pw);
-                }
+                    d[i] = d[i] * rb + d2[i] * kEnv(i) * db * match;
             }
         }
     }
@@ -1704,10 +1719,14 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
     // stage re-normalises after the blend, so Blend knobs shape BALANCE, never total level.
     float rbApplied = 1.0f;
     bool  delayLayerOn = false;
+    float delayMatch = 1.0f;
     {
         const float db = delayBlendAmt.load();
         const float rb = reverbBlendAmt.load();
-        const bool  wantLayer = hasFX && delayFlavor.load() != 0 && db > 0.001f && avail >= swellLen;
+        // The layer only exists when a REVERB built the main swell — otherwise the main tail
+        // already IS the delay (fallback), and blending delay with itself changes nothing.
+        const bool  wantLayer = hasFX && delayFlavor.load() != 0 && reverbFlavor.load() != 0
+                             && db > 0.001f && avail >= swellLen;
         if (wantLayer)
         {
             if (renderWork2.getNumChannels() < 2 || renderWork2.getNumSamples() < renderLen)
@@ -1719,10 +1738,42 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
                 delayLayerOn = true;
                 applyPitch(renderWork2, b2, pitchSemitones.load());
                 applyDelay(renderWork2, renderLen, true, swellSec);        // delay-only forward tail
-                const float sw = delaySwellPos.load();
-                const float s0 = 0.10f + 0.65f * sw;                       // bloom onset (fraction of the rise)
-                const float pw = 1.0f  + 2.0f  * sw;                       // later setting = steeper arrival
+                // Delay Swell 0 = NO envelope (repeats ride the whole rise like a real delay);
+                // above 0 = bloom onset that arrives later and steeper toward the landing.
+                const float sw   = delaySwellPos.load();
+                const bool  flat = sw < 0.02f;
+                const float s0   = 0.72f * sw;
+                const float pw   = 1.0f + 2.5f * sw;
+                auto layerEnv = [&](int i) -> float
+                {
+                    if (flat) return 1.0f;
+                    const float x  = (float) i / (float) juce::jmax(1, swellLen - 1);
+                    const float u  = x <= s0 ? 0.0f : (x - s0) / (1.0f - s0);
+                    const float ss = u * u * (3.0f - 2.0f * u);            // smoothstep onset
+                    return std::pow(ss, pw);
+                };
                 rbApplied = (rb < 0.01f && db < 0.01f) ? 1.0f : juce::jmax(0.0f, rb);
+
+                // ENERGY-MATCH the delay layer to the main swell over the rise. A sparse echo
+                // tail carries 10-20 dB less energy than the dense decay-fitted reverb wash —
+                // without matching, Blend 100% was a barely-audible texture change. Matched,
+                // Blend is a true relative balance: 50/50 really means half reverb, half echoes.
+                double mainE = 0.0, layerE = 0.0;
+                for (int c = 0; c < dest.getNumChannels(); ++c)
+                {
+                    const int sc2 = juce::jmin(c, renderWork2.getNumChannels() - 1);
+                    const float* w2 = renderWork2.getReadPointer(sc2);
+                    const float* d  = dest.getReadPointer(c);
+                    for (int i = 0; i < swellLen; ++i)
+                    {
+                        const float dl = w2[tailStart + swellLen - 1 - i] * layerEnv(i);
+                        mainE  += (double) d[i] * d[i];
+                        layerE += (double) dl * dl;
+                    }
+                }
+                delayMatch = (mainE > 1.0e-12 && layerE > 1.0e-12)
+                           ? juce::jlimit(0.25f, 16.0f, (float) std::sqrt(mainE / layerE)) : 1.0f;
+
                 for (int c = 0; c < dest.getNumChannels(); ++c)
                 {
                     const int sc2 = juce::jmin(c, renderWork2.getNumChannels() - 1);
@@ -1730,17 +1781,13 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
                     float* d = dest.getWritePointer(c);
                     for (int i = 0; i < swellLen; ++i)
                     {
-                        const float x  = (float) i / (float) juce::jmax(1, swellLen - 1);
-                        const float u  = x <= s0 ? 0.0f : (x - s0) / (1.0f - s0);
-                        const float ss = u * u * (3.0f - 2.0f * u);        // smoothstep onset
-                        const float env = std::pow(ss, pw);
-                        const float dl  = w2[tailStart + swellLen - 1 - i];   // reversed delay tail
-                        d[i] = d[i] * rbApplied + dl * db * env;
+                        const float dl = w2[tailStart + swellLen - 1 - i];   // reversed delay tail
+                        d[i] = d[i] * rbApplied + dl * layerEnv(i) * db * delayMatch;
                     }
                 }
             }
         }
-        else if (hasFX && rb < 0.999f && delayFlavor.load() != 0 && db > 0.001f)
+        else if (hasFX && rb < 0.999f && delayFlavor.load() != 0 && reverbFlavor.load() != 0 && db > 0.001f)
         {
             rbApplied = juce::jmax(0.05f, rb);   // layer wanted but window too short → just scale main
             dest.applyGain(0, swellLen, rbApplied);
@@ -1756,7 +1803,12 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
     int ringout = 0;
     if (avail >= swellLen)
     {
-        const int want = swellRingoutSamples();
+        // Delay trails deserve more room than reverb decay: with the layer active the Ringout
+        // macro scales up to 6 s of trail (vs 3 s), so feedback can genuinely run past the
+        // landing ("stress far") instead of being clipped after a second.
+        int want = swellRingoutSamples();
+        if (delayLayerOn)
+            want = juce::jmax(want, (int) (juce::jlimit(0.0f, 1.0f, macroRingout.load()) * 6.0f * (float) currentSR));
         if (want > 0)
         {
             float pk = 0.0f;
@@ -1794,7 +1846,7 @@ int BacktraceProcessor::renderSwell(juce::AudioBuffer<float>& dest, int swellLen
         // instead of hard-cutting at the swell end. Ringout macro sets how much trails.
         const float* w2 = delayLayerOn ? renderWork2.getReadPointer(juce::jmin(c, renderWork2.getNumChannels() - 1))
                                        : nullptr;
-        const float dbTrail = delayBlendAmt.load();
+        const float dbTrail = delayBlendAmt.load() * delayMatch;   // trail level matches the rise's balance
         for (int i = 0; i < ringout; ++i)
             d[swellLen + i] = w[tailStart + 1 + i] * rbApplied
                             + (w2 != nullptr ? w2[tailStart + 1 + i] * dbTrail : 0.0f);
