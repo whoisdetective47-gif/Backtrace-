@@ -304,6 +304,10 @@ public:
     float getOutHpf() const   { return outHpfHz.load(); }
     void  setOutLpf(float hz) { outLpfHz.store(juce::jlimit(200.0f, 20000.0f, hz)); markDirty(); }
     float getOutLpf() const   { return outLpfHz.load(); }
+    // ALL (default) = the filter shapes everything incl. the dry blend; WET = only the effect is
+    // filtered (live: the wet feed — LTI, so identical to filtering the swell; dry untouched).
+    void  setOutFilterWetOnly(bool b) { outFilterWetOnly.store(b); markDirty(); }
+    bool  getOutFilterWetOnly() const { return outFilterWetOnly.load(); }
     static double liveNoteQuarters(int idx)
     { static const double q[] = { 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0 }; return q[juce::jlimit(0, 7, idx)]; }
     static double liveFeelMult(int feel) { return feel == 1 ? 1.5 : feel == 2 ? (2.0 / 3.0) : 1.0; }
@@ -620,6 +624,7 @@ private:
 
     // Global output filter — TPT SVF state (12 dB/oct, Q 0.707, attenuate-only → level-safe).
     std::atomic<float> outHpfHz { 20.0f }, outLpfHz { 20000.0f };
+    std::atomic<bool>  outFilterWetOnly { false };
     struct OutSvf { float ic1 = 0.0f, ic2 = 0.0f; };
     OutSvf outHpState[2], outLpState[2];         // audio-thread only
     float  outHpZ = 20.0f, outLpZ = 20000.0f;    // smoothed cutoffs (audio-thread only)

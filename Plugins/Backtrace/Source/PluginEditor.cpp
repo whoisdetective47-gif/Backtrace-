@@ -641,6 +641,20 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
                    "20 kHz = off. Double-click to reset.",
                    [this](float v) { proc.setOutLpf(v); });
 
+    // ALL / WET: whether the global filter also shapes the DRY blend (ALL, the classic
+    // master-filter move) or only the effect (WET — dry stays completely clean).
+    outFilterModeButton.setClickingTogglesState(true);
+    outFilterModeButton.onClick = [this]
+    {
+        const bool wetOnly = outFilterModeButton.getToggleState();
+        proc.setOutFilterWetOnly(wetOnly);
+        outFilterModeButton.setButtonText(wetOnly ? "WET" : "ALL");
+    };
+    outFilterModeButton.setTooltip("Global filter target: ALL = everything including the dry blend "
+                                   "(master-filter sweep). WET = only the Backtrace effect is filtered - "
+                                   "your dry signal stays untouched.");
+    addAndMakeVisible(outFilterModeButton);
+
     // SHAPE — morphs the swell build-up curve. Centre (50) is the confirmed-good default; the
     // detent makes it easy to return to. Reads Gentle / Default / Bloom so it's obvious what it does.
     liveShapeKnob.setSliderStyle(juce::Slider::LinearHorizontal);
@@ -988,6 +1002,8 @@ void BacktraceEditor::syncControlsFromProcessor()
     reverbBlendSlider.setValue(proc.getReverbBlend(), juce::dontSendNotification);
     outHpfKnob.setValue(proc.getOutHpf(), juce::dontSendNotification);
     outLpfKnob.setValue(proc.getOutLpf(), juce::dontSendNotification);
+    outFilterModeButton.setToggleState(proc.getOutFilterWetOnly(), juce::dontSendNotification);
+    outFilterModeButton.setButtonText(proc.getOutFilterWetOnly() ? "WET" : "ALL");
 
     const int df = proc.getDelayFlavor();
     delayFlavorBox.setSelectedId(df + 1, juce::dontSendNotification);
@@ -2100,7 +2116,10 @@ void BacktraceEditor::resized()
             auto hpfCell = a.removeFromRight(64);
             outHpfLabel.setBounds(hpfCell.removeFromTop(16));
             outHpfKnob.setBounds(hpfCell);
-            a.removeFromRight(10);
+            auto modeCell = a.removeFromRight(42);
+            modeCell.removeFromTop(24);
+            outFilterModeButton.setBounds(modeCell.removeFromTop(22).reduced(2, 0));
+            a.removeFromRight(8);
         }
         const int mw = a.getWidth() / juce::jmax(1, macroKnobs.size());
         for (int i = 0; i < macroKnobs.size(); ++i)

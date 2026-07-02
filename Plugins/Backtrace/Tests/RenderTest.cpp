@@ -957,24 +957,41 @@ int main()
         // Real-time path: noise through processBlock with LPF 500 must lose HF energy.
         proc.setLiveMode(false);
         proc.prepareToPlay(SR, 512);
-        auto rtHfShare = [&]() {
+        auto rtHfShare = [&](int blocks, int measureFrom) {
             juce::Random rng(11); juce::AudioBuffer<float> blk(2, 512); juce::MidiBuffer mi;
-            juce::AudioBuffer<float> capRT(1, 512 * 40);
+            juce::AudioBuffer<float> capRT(1, 512 * blocks);
             int pos = 0;
-            for (int k = 0; k < 40; ++k)
+            for (int k = 0; k < blocks; ++k)
             {
                 for (int i = 0; i < 512; ++i) { const float s = (rng.nextFloat() * 2.0f - 1.0f) * 0.3f;
                     blk.setSample(0, i, s); blk.setSample(1, i, s); }
                 proc.processBlock(blk, mi);
                 capRT.copyFrom(0, pos, blk, 0, 0, 512); pos += 512;
             }
-            return hflfRatio(capRT, 512 * 10, pos, 2000.0);   // skip smoothing warm-up
+            return hflfRatio(capRT, 512 * measureFrom, pos, 2000.0);   // skip warm-up/history
         };
-        proc.setOutLpf(20000.0f); const double rtOpen = rtHfShare();
-        proc.setOutLpf(500.0f);   const double rtDark = rtHfShare();
+        proc.setOutLpf(20000.0f); const double rtOpen = rtHfShare(40, 10);
+        proc.setOutLpf(500.0f);   const double rtDark = rtHfShare(40, 10);
         check("real-time output filter darkens the stream", rtDark < rtOpen * 0.25,
               "hf/lf open=" + juce::String(rtOpen, 3) + " lpf500=" + juce::String(rtDark, 4));
-        proc.setOutLpf(20000.0f);
+
+        // WET mode: the dry passthrough must stay untouched while the filter is engaged.
+        proc.setOutFilterWetOnly(true);
+        const double rtWetMode = rtHfShare(40, 10);         // live OFF, no audition → pure dry
+        check("WET mode leaves the dry passthrough clean", rtWetMode > rtOpen * 0.6,
+              "hf/lf dry=" + juce::String(rtWetMode, 3) + " (open ref " + juce::String(rtOpen, 3) + ")");
+
+        // WET mode + live full-wet: the swell IS the effect → it must still darken.
+        proc.setLiveMode(true); proc.setMacroMix(1.0f); proc.setLiveWet(1.0f); proc.setLiveDry(0.0f);
+        proc.prepareToPlay(SR, 512);
+        proc.rebuildLiveIR();
+        { int w = 0; while (! proc.liveConvLoaded() && w < 4000) { juce::Thread::sleep(20); w += 20; } }
+        proc.setOutLpf(20000.0f); const double wetOpen = rtHfShare(160, 110);
+        proc.setOutLpf(500.0f);   const double wetDark = rtHfShare(160, 110);
+        check("WET mode still filters the live swell", wetDark < wetOpen * 0.35,
+              "hf/lf open=" + juce::String(wetOpen, 3) + " lpf500=" + juce::String(wetDark, 4));
+        proc.setOutLpf(20000.0f); proc.setOutFilterWetOnly(false);
+        proc.setLiveMode(false); proc.setMacroMix(0.25f); proc.setLiveDry(1.0f);
     }
 
     std::printf("19. Live REAL pitch (wet-feed transpose) + seamless kernel swap:\n");

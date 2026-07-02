@@ -219,9 +219,12 @@ void BacktraceProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
             buffer.getWritePointer(ch)[i] *= g;
     }
 
-    // GLOBAL OUTPUT FILTER — final HPF/LPF over everything heard (live, audition, passthrough).
+    // GLOBAL OUTPUT FILTER — ALL mode: final HPF/LPF over everything heard (live, audition,
+    // passthrough). WET mode: the live wet feed is filtered inside liveProcessInternal and
+    // auditions (pure effect material) are filtered here — the dry/passthrough stays untouched.
     // Before the scope tap so the display shows what you hear. Bypassed at default settings.
-    applyOutputFilterRT(buffer, numSmp);
+    if (! outFilterWetOnly.load() || playPlaying.load())
+        applyOutputFilterRT(buffer, numSmp);
 
     // LIVE SCOPE tap — decimated peak stream of the FINAL output for the editor's real-time view.
     // Read-only: never writes back to the signal. Lock-free (relaxed atomics); a little tearing on
@@ -278,6 +281,7 @@ juce::var BacktraceProcessor::getStateVar() const
     o->setProperty("delaySwell",  (double) delaySwellPos.load());
     o->setProperty("outHpf",      (double) outHpfHz.load());
     o->setProperty("outLpf",      (double) outLpfHz.load());
+    o->setProperty("outFilterWet", outFilterWetOnly.load());
     o->setProperty("preset", (currentPreset >= 0) ? getPresetName(currentPreset) : juce::String());
 
     auto* mac = new juce::DynamicObject();   // global swell macros
@@ -363,6 +367,7 @@ void BacktraceProcessor::setStateVar(const juce::var& v)
     delaySwellPos.store (o->hasProperty("delaySwell")  ? (float) (double) o->getProperty("delaySwell")  : 0.5f);
     outHpfHz.store(o->hasProperty("outHpf") ? (float) (double) o->getProperty("outHpf") : 20.0f);
     outLpfHz.store(o->hasProperty("outLpf") ? (float) (double) o->getProperty("outLpf") : 20000.0f);
+    outFilterWetOnly.store(o->hasProperty("outFilterWet") ? (bool) o->getProperty("outFilterWet") : false);
     requestLiveIR();                                  // rebuild the preverb kernel for restored settings
     if (dspPrepared.load()) pushLiveLatencyIfChanged();   // report restored preverb latency w/o needing the GUI
 
@@ -1500,6 +1505,10 @@ void BacktraceProcessor::liveProcessInternal(juce::AudioBuffer<float>& buffer)
             if (p1 != nullptr) p1[i] = livePitch.processSample(1, i1[i], ratio);
         }
     }
+    // WET filter mode: shape only the effect — filtering the wet FEED is (LTI) identical to
+    // filtering the swell itself, and the dry blend stays completely clean.
+    if (outFilterWetOnly.load())
+        applyOutputFilterRT(livePitchBuf, pn);
 
     const int act = lpActive.load();
     if (lpSwapPending.load() && lpXfadePos.load() < 0)

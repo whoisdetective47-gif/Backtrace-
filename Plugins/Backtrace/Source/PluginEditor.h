@@ -116,6 +116,7 @@ private:
     juce::Slider       liveMixKnob;                 // GLOBAL MIX / Blend (bottom-right)
     juce::Slider       outHpfKnob, outLpfKnob;      // GLOBAL output filter (bottom strip, always live)
     juce::Label        outHpfLabel { {}, "HPF" }, outLpfLabel { {}, "LPF" };
+    juce::TextButton   outFilterModeButton { "ALL" };   // ALL = filter dry too · WET = effect only
     // Delay-layer controls: the reverb is the MAIN swell, the delay is a second layer with
     // its own bloom timeline (Delay Swell = when it enters, not feedback).
     juce::Slider       delayBlendSlider, delaySwellSlider, reverbBlendSlider;
