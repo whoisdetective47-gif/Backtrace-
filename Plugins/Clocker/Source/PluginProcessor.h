@@ -30,6 +30,7 @@ namespace ids
     // active timer
     CLKR_ID(clockIn) CLKR_ID(accumulated) CLKR_ID(running)
     CLKR_ID(lastResume) CLKR_ID(savedAt)
+    CLKR_ID(onBreak) CLKR_ID(prevType) CLKR_ID(prevBillable)
     #undef CLKR_ID
 }
 
@@ -77,6 +78,12 @@ public:
     int  activeType() const;
     void setActiveBillable (bool b);
     void setActiveType (int t);
+
+    // Break: closes the current work span into the log, then starts a
+    // non-billable "Break" entry so break time is tracked, not lost.
+    bool isOnBreak() const;
+    void startBreak (const juce::String& notesForCurrentEntry);
+    void endBreak();                     // resumes previous type/billable state
 
     void addManualEntry (juce::int64 durMs, bool billable, int type,
                          const juce::String& notes);

@@ -116,6 +116,27 @@ int main()
             if (buf.getSample (ch, i) != ref.getSample (ch, i)) { identical = false; break; }
     check (identical, "processBlock is a bit-exact passthrough");
 
+    // --- break button: logs work span, tracks break, resumes previous state ----
+    ClockerProcessor p3;
+    p3.clockIn();
+    shiftActiveBack (p3, 60);
+    p3.startBreak ("pre-break work");
+    check (p3.isOnBreak(), "break started");
+    check (p3.clockState() == ClockerProcessor::ClockState::running, "break timer runs");
+    check (p3.entries().getNumChildren() == 1, "work span logged when break starts");
+    check (! p3.activeBillable(), "break span is non-billable");
+    shiftActiveBack (p3, 15);
+    p3.endBreak();
+    check (! p3.isOnBreak(), "break ended");
+    check (p3.entries().getNumChildren() == 2, "break span logged when break ends");
+    auto brk = p3.entries().getChild (1);
+    check ((int) brk.getProperty (ids::type) == 11, "break entry type = Break");
+    check (! (bool) brk.getProperty (ids::billable), "break entry non-billable");
+    check (std::abs ((juce::int64) brk.getProperty (ids::durationMs) - 15 * 60000LL) < 2000,
+           "break entry ~15m (" + formatDuration (brk.getProperty (ids::durationMs)) + ")");
+    check (p3.activeType() == 4 && p3.activeBillable(),
+           "back on the case with previous type/billable restored");
+
     std::cout << "\n" << (failures == 0 ? "ALL TESTS PASSED" : juce::String (failures) + " FAILURES")
               << std::endl;
     return failures == 0 ? 0 : 1;

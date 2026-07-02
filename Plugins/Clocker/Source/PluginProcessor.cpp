@@ -198,6 +198,41 @@ void ClockerProcessor::setActiveType (int t)
     else settings().setProperty (ids::defaultType, t, nullptr);
 }
 
+bool ClockerProcessor::isOnBreak() const
+{
+    return (bool) activeTree().getProperty (ids::onBreak, false);
+}
+
+void ClockerProcessor::startBreak (const juce::String& notesForCurrentEntry)
+{
+    if (! activeTree().isValid() || isOnBreak()) return;
+    const int  prevT = activeType();
+    const bool prevB = activeBillable();
+    clockOut (notesForCurrentEntry);              // log the work span so far
+    clockIn();                                    // fresh span for the break
+    auto b = activeTree();
+    b.setProperty (ids::type,         11, nullptr);   // Break
+    b.setProperty (ids::billable,     false, nullptr);
+    b.setProperty (ids::onBreak,      true,  nullptr);
+    b.setProperty (ids::prevType,     prevT, nullptr);
+    b.setProperty (ids::prevBillable, prevB, nullptr);
+    sendChangeMessage();
+}
+
+void ClockerProcessor::endBreak()
+{
+    auto a = activeTree();
+    if (! a.isValid() || ! isOnBreak()) return;
+    const int  prevT = a.getProperty (ids::prevType, settings().getProperty (ids::defaultType, 4));
+    const bool prevB = a.getProperty (ids::prevBillable, true);
+    clockOut ({});                                // log the break span
+    clockIn();                                    // back on the case
+    auto w = activeTree();
+    w.setProperty (ids::type,     prevT, nullptr);
+    w.setProperty (ids::billable, prevB, nullptr);
+    sendChangeMessage();
+}
+
 void ClockerProcessor::addManualEntry (juce::int64 durMs, bool billable, int type,
                                        const juce::String& notes)
 {

@@ -934,6 +934,49 @@ int main()
         proc.setLiveShape(0.5f);
     }
 
+    std::printf("18. Global output filter (real-time + baked print, hear = print):\n");
+    {
+        // Baked print: LPF 800 Hz must darken the exported WAV vs fully open.
+        loadSnare();
+        setReverb(proc, 1); proc.setDelayFlavor(0); proc.setSwellLenBars(1.0f);
+        proc.setOutHpf(20.0f); proc.setOutLpf(20000.0f);
+        auto open = createSwell(proc, tmp, landing, sr);
+        proc.setOutLpf(800.0f);
+        auto dark = createSwell(proc, tmp, landing, sr);
+        const double brOpen = hflfRatio(open, 0, landing, 2000.0), brDark = hflfRatio(dark, 0, landing, 2000.0);
+        check("LPF 800 bakes into the print (darker export)", brDark < brOpen * 0.4,
+              "hf/lf open=" + juce::String(brOpen, 3) + " lpf800=" + juce::String(brDark, 4));
+        proc.setOutLpf(20000.0f); proc.setOutHpf(400.0f);
+        auto thin = createSwell(proc, tmp, landing, sr);
+        const double brThin = hflfRatio(thin, 0, landing, 300.0);
+        const double brFull = hflfRatio(open, 0, landing, 300.0);
+        check("HPF 400 bakes into the print (lows removed)", brThin > brFull * 1.5,
+              "hf/lf open=" + juce::String(brFull, 3) + " hpf400=" + juce::String(brThin, 3));
+        proc.setOutHpf(20.0f);
+
+        // Real-time path: noise through processBlock with LPF 500 must lose HF energy.
+        proc.setLiveMode(false);
+        proc.prepareToPlay(SR, 512);
+        auto rtHfShare = [&]() {
+            juce::Random rng(11); juce::AudioBuffer<float> blk(2, 512); juce::MidiBuffer mi;
+            juce::AudioBuffer<float> capRT(1, 512 * 40);
+            int pos = 0;
+            for (int k = 0; k < 40; ++k)
+            {
+                for (int i = 0; i < 512; ++i) { const float s = (rng.nextFloat() * 2.0f - 1.0f) * 0.3f;
+                    blk.setSample(0, i, s); blk.setSample(1, i, s); }
+                proc.processBlock(blk, mi);
+                capRT.copyFrom(0, pos, blk, 0, 0, 512); pos += 512;
+            }
+            return hflfRatio(capRT, 512 * 10, pos, 2000.0);   // skip smoothing warm-up
+        };
+        proc.setOutLpf(20000.0f); const double rtOpen = rtHfShare();
+        proc.setOutLpf(500.0f);   const double rtDark = rtHfShare();
+        check("real-time output filter darkens the stream", rtDark < rtOpen * 0.25,
+              "hf/lf open=" + juce::String(rtOpen, 3) + " lpf500=" + juce::String(rtDark, 4));
+        proc.setOutLpf(20000.0f);
+    }
+
     std::printf("\nRESULT: %d passed, %d failed -> %s\n", g_pass, g_fail,
                 g_fail == 0 ? "ALL RENDER CHECKS PASS" : "FAILURES ABOVE");
     tmp.deleteRecursively();

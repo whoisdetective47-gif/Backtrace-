@@ -4,36 +4,36 @@
 using namespace clocker;
 
 //==============================================================================
-// theme helpers
+// theme
 //==============================================================================
+juce::Font theme::type (float size, bool bold)
+{
+    // American Typewriter ships with macOS; JUCE falls back gracefully elsewhere
+    return juce::Font (juce::FontOptions ("American Typewriter", size,
+                                          bold ? juce::Font::bold : juce::Font::plain));
+}
+
 juce::Font theme::mono (float size, bool bold)
 {
     return juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), size,
                                           bold ? juce::Font::bold : juce::Font::plain));
 }
 
-juce::Font theme::ui (float size, bool bold)
-{
-    return juce::Font (juce::FontOptions (size, bold ? juce::Font::bold : juce::Font::plain));
-}
-
 void theme::styleButton (juce::TextButton& b, juce::Colour accent)
 {
-    b.setColour (juce::TextButton::buttonColourId,   panel);
-    b.setColour (juce::TextButton::buttonOnColourId, accent.withAlpha (0.6f));
-    b.setColour (juce::TextButton::textColourOffId,  text);
-    b.setColour (juce::TextButton::textColourOnId,   juce::Colours::black);
-    b.setColour (juce::ComboBox::outlineColourId,    accent.withAlpha (0.45f));
+    b.setColour (juce::TextButton::buttonColourId,  field);
+    b.setColour (juce::TextButton::textColourOffId, accent);   // LNF also borders with this
+    b.setColour (juce::TextButton::textColourOnId,  accent);
 }
 
 void theme::styleEditor (juce::TextEditor& e, bool multiline)
 {
-    e.setColour (juce::TextEditor::backgroundColourId,     inset);
-    e.setColour (juce::TextEditor::textColourId,           text);
-    e.setColour (juce::TextEditor::outlineColourId,        juce::Colour (0x33ffffff));
-    e.setColour (juce::TextEditor::focusedOutlineColourId, amber);
-    e.setColour (juce::CaretComponent::caretColourId,      amber);
-    e.setFont (ui (13.0f));
+    e.setColour (juce::TextEditor::backgroundColourId,     field);
+    e.setColour (juce::TextEditor::textColourId,           ink);
+    e.setColour (juce::TextEditor::outlineColourId,        ink.withAlpha (0.35f));
+    e.setColour (juce::TextEditor::focusedOutlineColourId, stamp);
+    e.setColour (juce::CaretComponent::caretColourId,      ink);
+    e.setFont (type (13.5f));
     if (multiline)
     {
         e.setMultiLine (true);
@@ -43,17 +43,108 @@ void theme::styleEditor (juce::TextEditor& e, bool multiline)
 
 void theme::styleCombo (juce::ComboBox& c)
 {
-    c.setColour (juce::ComboBox::backgroundColourId, inset);
-    c.setColour (juce::ComboBox::textColourId,       text);
-    c.setColour (juce::ComboBox::outlineColourId,    juce::Colour (0x33ffffff));
-    c.setColour (juce::ComboBox::arrowColourId,      amber);
+    c.setColour (juce::ComboBox::backgroundColourId, field);
+    c.setColour (juce::ComboBox::textColourId,       ink);
+    c.setColour (juce::ComboBox::outlineColourId,    ink.withAlpha (0.35f));
+    c.setColour (juce::ComboBox::arrowColourId,      stamp);
 }
 
 void theme::caption (juce::Label& l, const juce::String& s)
 {
     l.setText (s, juce::dontSendNotification);
-    l.setColour (juce::Label::textColourId, amber);
-    l.setFont (ui (10.5f, true));
+    l.setColour (juce::Label::textColourId, brass);
+    l.setFont (type (11.0f, true));
+}
+
+void theme::paintPaper (juce::Graphics& g, juce::Rectangle<int> area)
+{
+    g.setColour (paper);
+    g.fillRect (area);
+    // subtle age speckle — fixed seed so it never flickers
+    juce::Random rnd (47);
+    g.setColour (ink.withAlpha (0.03f));
+    for (int i = 0; i < 260; ++i)
+        g.fillRect (area.getX() + rnd.nextInt (juce::jmax (1, area.getWidth())),
+                    area.getY() + rnd.nextInt (juce::jmax (1, area.getHeight())),
+                    rnd.nextInt (3) + 1, 1);
+    // faded top edge, like the folder has seen some years
+    g.setGradientFill (juce::ColourGradient (ink.withAlpha (0.08f),
+                                             (float) area.getX(), (float) area.getY(),
+                                             juce::Colours::transparentBlack,
+                                             (float) area.getX(), (float) area.getY() + 14.0f, false));
+    g.fillRect (area.removeFromTop (14));
+}
+
+void theme::drawStamp (juce::Graphics& g, const juce::String& text, juce::Colour c,
+                       juce::Rectangle<float> area, float angleDegrees)
+{
+    juce::Graphics::ScopedSaveState ss (g);
+    g.addTransform (juce::AffineTransform::rotation (juce::degreesToRadians (angleDegrees),
+                                                     area.getCentreX(), area.getCentreY()));
+    g.setColour (c.withAlpha (0.9f));
+    g.drawRoundedRectangle (area, 4.0f, 2.0f);
+    g.drawRoundedRectangle (area.reduced (3.0f), 3.0f, 0.8f);
+    g.setFont (type (13.0f, true));
+    g.drawText (text, area, juce::Justification::centred);
+}
+
+//==============================================================================
+// look & feel
+//==============================================================================
+CaseFileLookAndFeel::CaseFileLookAndFeel()
+{
+    setColour (juce::PopupMenu::backgroundColourId,            theme::field);
+    setColour (juce::PopupMenu::textColourId,                  theme::ink);
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, theme::manila);
+    setColour (juce::PopupMenu::highlightedTextColourId,       theme::ink);
+    setColour (juce::ScrollBar::thumbColourId,                 theme::manila.darker (0.2f));
+    setColour (juce::ListBox::backgroundColourId,              theme::field);
+    setColour (juce::TabbedComponent::backgroundColourId,      theme::desk);
+    setColour (juce::TabbedComponent::outlineColourId,         juce::Colours::transparentBlack);
+}
+
+juce::Font CaseFileLookAndFeel::getTextButtonFont (juce::TextButton&, int)
+{
+    return theme::type (13.5f, true);
+}
+
+void CaseFileLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b,
+                                                const juce::Colour&, bool over, bool down)
+{
+    auto r = b.getLocalBounds().toFloat().reduced (1.5f);
+    auto base = b.findColour (juce::TextButton::buttonColourId);
+    if (down) base = base.darker (0.12f);
+    else if (over && b.isEnabled()) base = base.brighter (0.05f);
+    g.setColour (base);
+    g.fillRoundedRectangle (r, 4.0f);
+    auto border = b.findColour (juce::TextButton::textColourOffId)
+                      .withAlpha (b.isEnabled() ? 0.85f : 0.25f);
+    g.setColour (border);
+    g.drawRoundedRectangle (r, 4.0f, 1.6f);
+}
+
+void CaseFileLookAndFeel::drawTabButton (juce::TabBarButton& b, juce::Graphics& g, bool over, bool)
+{
+    auto r = b.getLocalBounds().toFloat().reduced (1.5f, 0.0f).withTrimmedTop (3.0f);
+    const bool front = b.isFrontTab();
+
+    juce::Path tab;   // folder-tab: rounded top corners, open bottom
+    tab.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), r.getHeight() + 8.0f,
+                             7.0f, 7.0f, true, true, false, false);
+    g.setColour (front ? theme::paper : theme::manila.darker (over ? 0.02f : 0.14f));
+    g.fillPath (tab);
+    g.setColour (theme::ink.withAlpha (front ? 0.6f : 0.35f));
+    g.strokePath (tab, juce::PathStrokeType (1.0f));
+
+    g.setColour (front ? theme::ink : theme::ink.withAlpha (0.6f));
+    g.setFont (theme::type (12.0f, front));
+    g.drawText (b.getButtonText().toUpperCase(), b.getLocalBounds().withTrimmedTop (3),
+                juce::Justification::centred);
+}
+
+int CaseFileLookAndFeel::getTabButtonBestWidth (juce::TabBarButton& b, int)
+{
+    return theme::type (12.0f, true).getStringWidth (b.getButtonText().toUpperCase()) + 30;
 }
 
 static void fillSessionTypes (juce::ComboBox& box)
@@ -67,33 +158,47 @@ static void fillSessionTypes (juce::ComboBox& box)
 //==============================================================================
 ClockTab::ClockTab (ClockerProcessor& p) : ClockerTab (p)
 {
-    timerLabel.setFont (theme::mono (58.0f, true));
-    timerLabel.setColour (juce::Label::textColourId, theme::text);
+    logo = juce::ImageCache::getFromMemory (BinaryData::logo_detective47_dust1200_BLUE_png,
+                                            BinaryData::logo_detective47_dust1200_BLUE_pngSize);
+
+    timerLabel.setFont (theme::mono (60.0f, true));
+    timerLabel.setColour (juce::Label::textColourId, theme::ink);
     timerLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (timerLabel);
 
-    statusLabel.setFont (theme::ui (14.0f, true));
+    statusLabel.setFont (theme::type (15.0f, true));
     statusLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (statusLabel);
 
-    contextLabel.setFont (theme::ui (12.0f));
-    contextLabel.setColour (juce::Label::textColourId, theme::dim);
+    contextLabel.setFont (theme::type (12.0f));
+    contextLabel.setColour (juce::Label::textColourId, theme::inkDim);
     contextLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (contextLabel);
 
-    theme::styleButton (clockInBtn,  theme::green);
-    theme::styleButton (pauseBtn,    theme::amber);
-    theme::styleButton (resumeBtn,   theme::green);
-    theme::styleButton (clockOutBtn, theme::red);
-    clockInBtn.onClick  = [this] { proc.clockIn(); refresh(); };
-    pauseBtn.onClick    = [this] { proc.pauseTimer(); refresh(); };
-    resumeBtn.onClick   = [this] { proc.resumeTimer(); refresh(); };
-    clockOutBtn.onClick = [this] { proc.clockOut (notesEd.getText().trim()); notesEd.clear(); refresh(); };
-    for (auto* b : { &clockInBtn, &pauseBtn, &resumeBtn, &clockOutBtn })
+    theme::styleButton (punchInBtn,     theme::approve);
+    theme::styleButton (pauseResumeBtn, theme::brass);
+    theme::styleButton (breakBtn,       theme::brass);
+    theme::styleButton (punchOutBtn,    theme::stamp);
+    punchInBtn.onClick  = [this] { proc.clockIn(); refresh(); };
+    pauseResumeBtn.onClick = [this]
+    {
+        if (proc.clockState() == ClockerProcessor::ClockState::running) proc.pauseTimer();
+        else                                                            proc.resumeTimer();
+        refresh();
+    };
+    breakBtn.onClick = [this]
+    {
+        if (proc.isOnBreak()) proc.endBreak();
+        else { proc.startBreak (notesEd.getText().trim()); notesEd.clear(); }
+        refresh();
+    };
+    punchOutBtn.onClick = [this] { proc.clockOut (notesEd.getText().trim()); notesEd.clear(); refresh(); };
+    for (auto* b : { &punchInBtn, &pauseResumeBtn, &breakBtn, &punchOutBtn })
         addAndMakeVisible (b);
 
-    billableToggle.setColour (juce::ToggleButton::textColourId, theme::text);
-    billableToggle.setColour (juce::ToggleButton::tickColourId, theme::green);
+    billableToggle.setColour (juce::ToggleButton::textColourId, theme::ink);
+    billableToggle.setColour (juce::ToggleButton::tickColourId, theme::stamp);
+    billableToggle.setColour (juce::ToggleButton::tickDisabledColourId, theme::inkDim);
     billableToggle.onClick = [this] { proc.setActiveBillable (billableToggle.getToggleState()); refresh(); };
     addAndMakeVisible (billableToggle);
 
@@ -108,40 +213,62 @@ ClockTab::ClockTab (ClockerProcessor& p) : ClockerTab (p)
     };
     addAndMakeVisible (typeBox);
 
-    theme::caption (notesCap, "NOTES FOR THIS ENTRY");
+    theme::caption (notesCap, "FIELD NOTES — ATTACHED TO THIS ENTRY");
     addAndMakeVisible (notesCap);
     theme::styleEditor (notesEd, true);
     addAndMakeVisible (notesEd);
 
-    theme::caption (manualCap, "ADD MANUAL TIME  (H : M)");
+    theme::caption (manualCap, "LATE ENTRY — ADD TIME BY HAND");
     addAndMakeVisible (manualCap);
     for (auto* e : { &manualHoursEd, &manualMinsEd })
     {
         theme::styleEditor (*e);
+        e->setFont (theme::mono (15.0f));
         e->setInputRestrictions (3, "0123456789");
-        e->setJustification (juce::Justification::centred);
+        e->setSelectAllWhenFocused (true);
         addAndMakeVisible (e);
     }
-    theme::styleButton (manualAddBtn, theme::blue);
+    manualHoursEd.setTextToShowWhenEmpty ("H", theme::inkDim);
+    manualMinsEd.setTextToShowWhenEmpty ("M", theme::inkDim);
+    manualHoursEd.setExplicitFocusOrder (1);
+    manualMinsEd.setExplicitFocusOrder (2);
+
+    colonLabel.setText (":", juce::dontSendNotification);
+    colonLabel.setFont (theme::mono (18.0f, true));
+    colonLabel.setColour (juce::Label::textColourId, theme::ink);
+    colonLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (colonLabel);
+
+    theme::styleButton (manualAddBtn, theme::ink);
     manualAddBtn.onClick = [this]
     {
-        const auto h = manualHoursEd.getText().getIntValue();
-        const auto m = manualMinsEd.getText().getIntValue();
-        const juce::int64 ms = ((juce::int64) h * 60 + m) * 60000;
-        if (ms > 0)
-        {
-            proc.addManualEntry (ms, billableToggle.getToggleState(),
-                                 juce::jmax (0, typeBox.getSelectedId() - 1),
-                                 notesEd.getText().trim());
-            manualHoursEd.clear();
-            manualMinsEd.clear();
-            notesEd.clear();
-        }
+        addManualMinutes ((juce::int64) manualHoursEd.getText().getIntValue() * 60
+                          + manualMinsEd.getText().getIntValue());
+        manualHoursEd.clear();
+        manualMinsEd.clear();
     };
     addAndMakeVisible (manualAddBtn);
 
+    add15Btn.onClick = [this] { addManualMinutes (15); };
+    add30Btn.onClick = [this] { addManualMinutes (30); };
+    add60Btn.onClick = [this] { addManualMinutes (60); };
+    for (auto* b : { &add15Btn, &add30Btn, &add60Btn })
+    {
+        theme::styleButton (*b, theme::inkDim.withAlpha (1.0f));
+        addAndMakeVisible (b);
+    }
+
     refresh();
     startTimer (500);
+}
+
+void ClockTab::addManualMinutes (juce::int64 minutes)
+{
+    if (minutes <= 0) return;
+    proc.addManualEntry (minutes * 60000, billableToggle.getToggleState(),
+                         juce::jmax (0, typeBox.getSelectedId() - 1),
+                         notesEd.getText().trim());
+    notesEd.clear();
 }
 
 void ClockTab::refresh()
@@ -152,36 +279,44 @@ void ClockTab::refresh()
     timerLabel.setText (decimal ? juce::String (ms / 3600000.0, 2) + " h" : formatClock (ms),
                         juce::dontSendNotification);
 
-    switch (st)
+    if (st == ClockerProcessor::ClockState::running && proc.isOnBreak())
     {
-        case ClockerProcessor::ClockState::running:
-            statusLabel.setText ("ON THE CASE — CLOCKED IN", juce::dontSendNotification);
-            statusLabel.setColour (juce::Label::textColourId, theme::green);
-            break;
-        case ClockerProcessor::ClockState::paused:
-            statusLabel.setText ("PAUSED", juce::dontSendNotification);
-            statusLabel.setColour (juce::Label::textColourId, theme::amber);
-            break;
-        default:
-            statusLabel.setText ("OFF THE CLOCK", juce::dontSendNotification);
-            statusLabel.setColour (juce::Label::textColourId, theme::dim);
-            break;
+        statusLabel.setText ("ON BREAK — OFF THE RECORD", juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, theme::brass);
+    }
+    else if (st == ClockerProcessor::ClockState::running)
+    {
+        statusLabel.setText ("ON THE CASE — CLOCKED IN", juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, theme::approve);
+    }
+    else if (st == ClockerProcessor::ClockState::paused)
+    {
+        statusLabel.setText ("PAUSED", juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, theme::brass);
+    }
+    else
+    {
+        statusLabel.setText ("OFF THE CLOCK", juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, theme::inkDim);
     }
 
     auto proj = proc.project();
-    juce::String ctx;
-    ctx << (proc.activeBillable() ? "Billable: ON" : "Billable: OFF")
-        << "  •  " << sessionTypes()[juce::jlimit (0, sessionTypes().size() - 1, proc.activeType())];
+    juce::String ctx ("CASE: ");
     auto client = proj.getProperty (ids::client).toString().trim();
     auto song   = proj.getProperty (ids::song).toString().trim();
-    if (client.isNotEmpty()) ctx << "  •  " << client;
-    if (song.isNotEmpty())   ctx << "  •  " << song;
+    ctx << (client.isNotEmpty() ? client : juce::String ("UNASSIGNED"));
+    if (song.isNotEmpty()) ctx << "  •  " << song;
+    ctx << "  •  " << (proc.activeBillable() ? "BILLABLE" : "NON-BILLABLE")
+        << "  •  " << sessionTypes()[juce::jlimit (0, sessionTypes().size() - 1, proc.activeType())];
     contextLabel.setText (ctx, juce::dontSendNotification);
 
-    clockInBtn.setEnabled  (st == ClockerProcessor::ClockState::idle);
-    pauseBtn.setEnabled    (st == ClockerProcessor::ClockState::running);
-    resumeBtn.setEnabled   (st == ClockerProcessor::ClockState::paused);
-    clockOutBtn.setEnabled (st != ClockerProcessor::ClockState::idle);
+    const bool idle = (st == ClockerProcessor::ClockState::idle);
+    punchInBtn.setEnabled (idle);
+    pauseResumeBtn.setEnabled (! idle && ! proc.isOnBreak());
+    pauseResumeBtn.setButtonText (st == ClockerProcessor::ClockState::paused ? "RESUME" : "PAUSE");
+    breakBtn.setEnabled (! idle);
+    breakBtn.setButtonText (proc.isOnBreak() ? "BACK TO CASE" : "BREAK");
+    punchOutBtn.setEnabled (! idle);
 
     if (billableToggle.getToggleState() != proc.activeBillable())
         billableToggle.setToggleState (proc.activeBillable(), juce::dontSendNotification);
@@ -191,50 +326,79 @@ void ClockTab::refresh()
 
 void ClockTab::paint (juce::Graphics& g)
 {
-    g.fillAll (theme::bg);
-    auto r = getLocalBounds().reduced (18).removeFromTop (170).toFloat();
-    g.setColour (theme::panel);
-    g.fillRoundedRectangle (r, 8.0f);
-    g.setColour (theme::amber.withAlpha (0.25f));
-    g.drawRoundedRectangle (r, 8.0f, 1.0f);
+    theme::paintPaper (g, getLocalBounds());
+
+    // ghosted Detective 47 badge behind everything, like a watermark
+    if (logo.isValid())
+    {
+        const float sz = 240.0f;
+        juce::Rectangle<float> wm ((float) getWidth() - sz - 24.0f,
+                                   (float) getHeight() - sz - 12.0f, sz, sz);
+        g.setOpacity (0.07f);
+        g.drawImage (logo, wm, juce::RectanglePlacement::centred);
+        g.setOpacity (1.0f);
+    }
+
+    // the timecard
+    auto card = getLocalBounds().reduced (22).removeFromTop (168).toFloat();
+    g.setColour (theme::field);
+    g.fillRoundedRectangle (card, 6.0f);
+    g.setColour (theme::ink.withAlpha (0.55f));
+    g.drawRoundedRectangle (card, 6.0f, 1.4f);
+    const float dash[] = { 4.0f, 3.0f };
+    g.drawDashedLine (juce::Line<float> (card.getX() + 8, card.getY() + 24,
+                                         card.getRight() - 8, card.getY() + 24),
+                      dash, 2, 0.8f);
+    g.setFont (theme::type (11.0f, true));
+    g.setColour (theme::brass);
+    g.drawText ("OFFICIAL TIMECARD", card.reduced (12, 5).removeFromTop (16),
+                juce::Justification::centredLeft);
+    g.drawText (juce::Time::getCurrentTime().formatted ("%b %d %Y").toUpperCase(),
+                card.reduced (12, 5).removeFromTop (16), juce::Justification::centredRight);
 }
 
 void ClockTab::resized()
 {
-    auto r = getLocalBounds().reduced (18);
+    auto r = getLocalBounds().reduced (22);
 
-    auto top = r.removeFromTop (170);
-    timerLabel.setBounds (top.removeFromTop (100).reduced (8, 10));
-    statusLabel.setBounds (top.removeFromTop (26));
-    contextLabel.setBounds (top.removeFromTop (22));
+    auto card = r.removeFromTop (168);
+    card.removeFromTop (26);
+    timerLabel.setBounds (card.removeFromTop (86));
+    statusLabel.setBounds (card.removeFromTop (26));
+    contextLabel.setBounds (card.removeFromTop (20));
 
     r.removeFromTop (14);
-    auto btns = r.removeFromTop (42);
+    auto btns = r.removeFromTop (44);
     const int bw = (btns.getWidth() - 3 * 10) / 4;
-    clockInBtn.setBounds  (btns.removeFromLeft (bw)); btns.removeFromLeft (10);
-    pauseBtn.setBounds    (btns.removeFromLeft (bw)); btns.removeFromLeft (10);
-    resumeBtn.setBounds   (btns.removeFromLeft (bw)); btns.removeFromLeft (10);
-    clockOutBtn.setBounds (btns);
+    punchInBtn.setBounds     (btns.removeFromLeft (bw)); btns.removeFromLeft (10);
+    pauseResumeBtn.setBounds (btns.removeFromLeft (bw)); btns.removeFromLeft (10);
+    breakBtn.setBounds       (btns.removeFromLeft (bw)); btns.removeFromLeft (10);
+    punchOutBtn.setBounds    (btns);
 
-    r.removeFromTop (14);
+    r.removeFromTop (12);
     auto row = r.removeFromTop (26);
     billableToggle.setBounds (row.removeFromLeft (110));
     row.removeFromLeft (12);
-    typeCap.setBounds (row.removeFromLeft (90));
-    typeBox.setBounds (row.removeFromLeft (190).withHeight (26));
+    typeCap.setBounds (row.removeFromLeft (94));
+    typeBox.setBounds (row.removeFromLeft (200).withHeight (26));
 
-    r.removeFromTop (12);
+    r.removeFromTop (10);
     notesCap.setBounds (r.removeFromTop (16));
-    notesEd.setBounds (r.removeFromTop (58));
+    notesEd.setBounds (r.removeFromTop (54));
 
-    r.removeFromTop (12);
+    r.removeFromTop (10);
     manualCap.setBounds (r.removeFromTop (16));
-    auto mrow = r.removeFromTop (28);
-    manualHoursEd.setBounds (mrow.removeFromLeft (54));
-    mrow.removeFromLeft (8);
-    manualMinsEd.setBounds (mrow.removeFromLeft (54));
-    mrow.removeFromLeft (12);
-    manualAddBtn.setBounds (mrow.removeFromLeft (180));
+    r.removeFromTop (2);
+    auto mrow = r.removeFromTop (30);
+    manualHoursEd.setBounds (mrow.removeFromLeft (58));
+    colonLabel.setBounds    (mrow.removeFromLeft (14));
+    manualMinsEd.setBounds  (mrow.removeFromLeft (58));
+    mrow.removeFromLeft (10);
+    manualAddBtn.setBounds  (mrow.removeFromLeft (86));
+    mrow.removeFromLeft (16);
+    add15Btn.setBounds (mrow.removeFromLeft (62)); mrow.removeFromLeft (6);
+    add30Btn.setBounds (mrow.removeFromLeft (62)); mrow.removeFromLeft (6);
+    add60Btn.setBounds (mrow.removeFromLeft (56));
 }
 
 //==============================================================================
@@ -242,43 +406,42 @@ void ClockTab::resized()
 //==============================================================================
 TimeLogTab::TimeLogTab (ClockerProcessor& p) : ClockerTab (p)
 {
-    list.setColour (juce::ListBox::backgroundColourId, theme::inset);
-    list.setColour (juce::ListBox::outlineColourId, juce::Colour (0x33ffffff));
+    list.setColour (juce::ListBox::backgroundColourId, theme::field);
+    list.setColour (juce::ListBox::outlineColourId, theme::ink.withAlpha (0.4f));
     list.setOutlineThickness (1);
     list.setRowHeight (24);
     addAndMakeVisible (list);
 
     theme::caption (editCap, "SELECTED ENTRY");
-    addAndMakeVisible (editCap);
     theme::caption (hoursCap, "H");
     theme::caption (minsCap,  "M");
-    theme::caption (typeCap2, "TYPE");
     theme::caption (notesCap2, "NOTES");
-    for (auto* c : { &hoursCap, &minsCap, &typeCap2, &notesCap2 })
+    for (auto* c : { &editCap, &hoursCap, &minsCap, &notesCap2 })
         addAndMakeVisible (c);
 
     for (auto* e : { &hoursEd, &minsEd })
     {
         theme::styleEditor (*e);
+        e->setFont (theme::mono (14.0f));
         e->setInputRestrictions (3, "0123456789");
-        e->setJustification (juce::Justification::centred);
+        e->setSelectAllWhenFocused (true);
         addAndMakeVisible (e);
     }
     theme::styleEditor (notesEd);
     addAndMakeVisible (notesEd);
 
-    billableToggle.setColour (juce::ToggleButton::textColourId, theme::text);
-    billableToggle.setColour (juce::ToggleButton::tickColourId, theme::green);
+    billableToggle.setColour (juce::ToggleButton::textColourId, theme::ink);
+    billableToggle.setColour (juce::ToggleButton::tickColourId, theme::stamp);
     addAndMakeVisible (billableToggle);
 
     fillSessionTypes (typeBox);
     theme::styleCombo (typeBox);
     addAndMakeVisible (typeBox);
 
-    theme::styleButton (saveBtn, theme::green);
+    theme::styleButton (saveBtn, theme::approve);
     saveBtn.onClick = [this] { saveSelected(); };
     addAndMakeVisible (saveBtn);
-    theme::styleButton (deleteBtn, theme::red);
+    theme::styleButton (deleteBtn, theme::stamp);
     deleteBtn.onClick = [this] { deleteSelected(); };
     addAndMakeVisible (deleteBtn);
 }
@@ -296,25 +459,30 @@ void TimeLogTab::paintListBoxItem (int row, juce::Graphics& g, int w, int h, boo
     auto e = entryForRow (row);
     if (! e.isValid()) return;
 
-    if (selected)             g.fillAll (theme::amber.withAlpha (0.18f));
-    else if ((row & 1) == 0)  g.fillAll (juce::Colour (0x0dffffff));
+    if (selected)             g.fillAll (theme::manila.withAlpha (0.55f));
+    else if ((row & 1) == 0)  g.fillAll (theme::ink.withAlpha (0.04f));
+    g.setColour (theme::ink.withAlpha (0.12f));            // ledger baseline
+    g.fillRect (0, h - 1, w, 1);
 
     const bool billable = e.getProperty (ids::billable);
-    g.setFont (theme::ui (12.0f));
+    g.setFont (theme::type (12.0f));
     auto r = juce::Rectangle<int> (0, 0, w, h).reduced (8, 0);
 
-    g.setColour (theme::dim);
+    g.setColour (theme::inkDim);
     g.drawText (formatDate (e.getProperty (ids::start)), r.removeFromLeft (92), juce::Justification::centredLeft);
-    g.setColour (theme::text);
+    g.setColour (theme::ink);
     g.drawText (sessionTypes()[juce::jlimit (0, sessionTypes().size() - 1, (int) e.getProperty (ids::type))],
                 r.removeFromLeft (120), juce::Justification::centredLeft);
-    g.setColour (billable ? theme::green : theme::red);
+    g.setColour (billable ? theme::approve : theme::stamp);
+    g.setFont (theme::type (11.0f, true));
     g.drawText (billable ? "BILL" : "N/B", r.removeFromLeft (42), juce::Justification::centredLeft);
-    g.setColour (theme::blue);
+    g.setColour (theme::ink);
+    g.setFont (theme::mono (12.0f, true));
     g.drawText (formatDuration (e.getProperty (ids::durationMs)), r.removeFromLeft (72), juce::Justification::centredLeft);
-    g.setColour (theme::dim);
+    g.setColour (theme::inkDim);
+    g.setFont (theme::type (12.0f));
     juce::String n = e.getProperty (ids::notes).toString().replace ("\n", " ");
-    if ((bool) e.getProperty (ids::manual)) n = "[manual] " + n;
+    if ((bool) e.getProperty (ids::manual)) n = "[late entry] " + n;
     g.drawText (n, r, juce::Justification::centredLeft);
 }
 
@@ -362,11 +530,9 @@ void TimeLogTab::refresh()
     list.repaint();
 }
 
-void TimeLogTab::paint (juce::Graphics& g) { g.fillAll (theme::bg); }
-
 void TimeLogTab::resized()
 {
-    auto r = getLocalBounds().reduced (18);
+    auto r = getLocalBounds().reduced (22);
     auto edit = r.removeFromBottom (96);
     list.setBounds (r);
 
@@ -434,13 +600,13 @@ ClientTab::ClientTab (ClockerProcessor& p) : ClockerTab (p)
     };
     addAndMakeVisible (projectTypeBox);
 
-    theme::styleButton (resetBtn, theme::red);
+    theme::styleButton (resetBtn, theme::stamp);
     resetBtn.onClick = [this]
     {
         juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::WarningIcon,
-            "New Project / Reset",
-            "Clear all time entries and project details?\nExport your time log first if you need it.",
-            "Reset", "Cancel", this,
+            "Close Case / New Project",
+            "Clear all time entries and project details?\nFile the report (Export tab) first if you need it.",
+            "Close Case", "Cancel", this,
             juce::ModalCallbackFunction::create ([this] (int result)
             {
                 if (result == 1) { proc.resetProject(); refresh(); }
@@ -479,11 +645,9 @@ void ClientTab::refresh()
                                   juce::dontSendNotification);
 }
 
-void ClientTab::paint (juce::Graphics& g) { g.fillAll (theme::bg); }
-
 void ClientTab::resized()
 {
-    auto r = getLocalBounds().reduced (18);
+    auto r = getLocalBounds().reduced (22);
     auto left  = r.removeFromLeft ((r.getWidth() - 20) / 2);
     r.removeFromLeft (20);
     auto right = r;
@@ -524,7 +688,7 @@ ProfitTab::ProfitTab (ClockerProcessor& p) : ClockerTab (p)
     view.setFont (theme::mono (13.0f));
     addAndMakeVisible (view);
 
-    theme::styleButton (refreshBtn, theme::blue);
+    theme::styleButton (refreshBtn, theme::brass);
     refreshBtn.onClick = [this] { refresh(); };
     addAndMakeVisible (refreshBtn);
 }
@@ -563,14 +727,13 @@ void ProfitTab::refresh()
         if (t.typeMs[i] > 0)
             s << sessionTypes()[i].paddedRight (' ', 20) << formatDuration (t.typeMs[i]) << "\n";
 
-    // simple business insight
-    s << "\nINSIGHT\n-------\n";
+    s << "\nDETECTIVE'S NOTES\n-----------------\n";
     if (t.totalMs <= 0)
-        s << "No time logged yet. Clock in and the numbers will follow.\n";
+        s << "No time logged yet. Punch in and the numbers will follow.\n";
     else
     {
         if (t.projectType == 1 && t.flatFee > 0.0)
-            s << "This project has taken " << formatDuration (t.totalMs) << ". At a "
+            s << "This case has taken " << formatDuration (t.totalMs) << ". At a "
               << formatMoney (t.flatFee) << " flat rate, the effective hourly rate is "
               << formatMoney (t.effectiveRate) << "/hr.\n";
         const auto revMs = t.typeMs[6] + t.typeMs[7];  // Revision + Recall
@@ -580,16 +743,16 @@ void ProfitTab::refresh()
         if (t.nonBillableMs > 0 && t.nonBillableMs * 100 / t.totalMs >= 20)
             s << juce::String ((int) (t.nonBillableMs * 100 / t.totalMs))
               << "% of tracked time is non-billable. Look at where those hours go.\n";
+        if (t.typeMs[11] > 0)
+            s << "Breaks: " << formatDuration (t.typeMs[11]) << " (tracked, not billed).\n";
     }
 
     view.setText (s, false);
 }
 
-void ProfitTab::paint (juce::Graphics& g) { g.fillAll (theme::bg); }
-
 void ProfitTab::resized()
 {
-    auto r = getLocalBounds().reduced (18);
+    auto r = getLocalBounds().reduced (22);
     auto top = r.removeFromTop (30);
     refreshBtn.setBounds (top.removeFromRight (110));
     r.removeFromTop (8);
@@ -615,7 +778,7 @@ ExportTab::ExportTab (ClockerProcessor& p) : ClockerTab (p)
     preview.setFont (theme::mono (12.0f));
     addAndMakeVisible (preview);
 
-    theme::styleButton (copyBtn, theme::blue);
+    theme::styleButton (copyBtn, theme::brass);
     copyBtn.onClick = [this]
     {
         juce::SystemClipboard::copyTextToClipboard (buildCurrent());
@@ -623,7 +786,7 @@ ExportTab::ExportTab (ClockerProcessor& p) : ClockerTab (p)
     };
     addAndMakeVisible (copyBtn);
 
-    theme::styleButton (saveBtn, theme::green);
+    theme::styleButton (saveBtn, theme::approve);
     saveBtn.onClick = [this]
     {
         static const char* exts[] = { ".txt", ".md", ".csv", ".json" };
@@ -633,7 +796,7 @@ ExportTab::ExportTab (ClockerProcessor& p) : ClockerTab (p)
                                          + exts[juce::jlimit (0, 3, formatBox.getSelectedId() - 1)]);
         if (file.replaceWithText (buildCurrent()))
         {
-            savedLabel.setText ("Saved: " + file.getFullPathName(), juce::dontSendNotification);
+            savedLabel.setText ("Filed: " + file.getFullPathName(), juce::dontSendNotification);
             file.revealToUser();
         }
         else
@@ -641,13 +804,13 @@ ExportTab::ExportTab (ClockerProcessor& p) : ClockerTab (p)
     };
     addAndMakeVisible (saveBtn);
 
-    savedLabel.setFont (theme::ui (11.0f));
-    savedLabel.setColour (juce::Label::textColourId, theme::dim);
+    savedLabel.setFont (theme::type (11.0f));
+    savedLabel.setColour (juce::Label::textColourId, theme::inkDim);
     addAndMakeVisible (savedLabel);
 
-    folderLabel.setFont (theme::ui (11.0f));
-    folderLabel.setColour (juce::Label::textColourId, theme::dim);
-    folderLabel.setText ("Clocker folder: " + ClockerProcessor::clockerFolder().getFullPathName(),
+    folderLabel.setFont (theme::type (11.0f));
+    folderLabel.setColour (juce::Label::textColourId, theme::inkDim);
+    folderLabel.setText ("Case archive: " + ClockerProcessor::clockerFolder().getFullPathName(),
                          juce::dontSendNotification);
     addAndMakeVisible (folderLabel);
 }
@@ -665,17 +828,15 @@ juce::String ExportTab::buildCurrent() const
 
 void ExportTab::refresh() { preview.setText (buildCurrent(), false); }
 
-void ExportTab::paint (juce::Graphics& g) { g.fillAll (theme::bg); }
-
 void ExportTab::resized()
 {
-    auto r = getLocalBounds().reduced (18);
+    auto r = getLocalBounds().reduced (22);
     auto top = r.removeFromTop (30);
     formatBox.setBounds (top.removeFromLeft (150));
     top.removeFromLeft (10);
     copyBtn.setBounds (top.removeFromLeft (170));
     top.removeFromLeft (10);
-    saveBtn.setBounds (top.removeFromLeft (200));
+    saveBtn.setBounds (top.removeFromLeft (170));
     r.removeFromTop (6);
     savedLabel.setBounds (r.removeFromTop (16));
     folderLabel.setBounds (r.removeFromBottom (16));
@@ -689,8 +850,8 @@ void ExportTab::resized()
 //==============================================================================
 SettingsTab::SettingsTab (ClockerProcessor& p) : ClockerTab (p)
 {
-    const char* names[6] = { "DEFAULT HOURLY RATE ($/HR)", "BILLING ROUNDING",
-                             "TIMER DISPLAY", "DEFAULT SESSION TYPE", "", "" };
+    const char* names[4] = { "DEFAULT HOURLY RATE ($/HR)", "BILLING ROUNDING",
+                             "TIMER DISPLAY", "DEFAULT SESSION TYPE" };
     for (int i = 0; i < 4; ++i)
     {
         theme::caption (caps[i], names[i]);
@@ -703,8 +864,8 @@ SettingsTab::SettingsTab (ClockerProcessor& p) : ClockerTab (p)
     { proc.settings().setProperty (ids::defaultRate, defaultRateEd.getText().getDoubleValue(), nullptr); };
     addAndMakeVisible (defaultRateEd);
 
-    roundingBox.addItem ("Exact time",                 1);
-    roundingBox.addItem ("Round to nearest 5 minutes", 2);
+    roundingBox.addItem ("Exact time",                  1);
+    roundingBox.addItem ("Round to nearest 5 minutes",  2);
     roundingBox.addItem ("Round to nearest 10 minutes", 3);
     roundingBox.addItem ("Round to nearest 15 minutes", 4);
     roundingBox.addItem ("Round to nearest 30 minutes", 5);
@@ -735,15 +896,15 @@ SettingsTab::SettingsTab (ClockerProcessor& p) : ClockerTab (p)
     };
     addAndMakeVisible (defaultTypeBox);
 
-    defaultBillableToggle.setColour (juce::ToggleButton::textColourId, theme::text);
-    defaultBillableToggle.setColour (juce::ToggleButton::tickColourId, theme::green);
+    defaultBillableToggle.setColour (juce::ToggleButton::textColourId, theme::ink);
+    defaultBillableToggle.setColour (juce::ToggleButton::tickColourId, theme::stamp);
     defaultBillableToggle.onClick = [this]
     { proc.settings().setProperty (ids::defaultBillable, defaultBillableToggle.getToggleState(), nullptr); };
     addAndMakeVisible (defaultBillableToggle);
 
-    folderLabel.setFont (theme::ui (11.0f));
-    folderLabel.setColour (juce::Label::textColourId, theme::dim);
-    folderLabel.setText ("Exports save to: " + ClockerProcessor::clockerFolder().getFullPathName(),
+    folderLabel.setFont (theme::type (11.0f));
+    folderLabel.setColour (juce::Label::textColourId, theme::inkDim);
+    folderLabel.setText ("Reports file to: " + ClockerProcessor::clockerFolder().getFullPathName(),
                          juce::dontSendNotification);
     addAndMakeVisible (folderLabel);
 
@@ -762,11 +923,9 @@ void SettingsTab::refresh()
                                           juce::dontSendNotification);
 }
 
-void SettingsTab::paint (juce::Graphics& g) { g.fillAll (theme::bg); }
-
 void SettingsTab::resized()
 {
-    auto r = getLocalBounds().reduced (18);
+    auto r = getLocalBounds().reduced (22);
     auto col = r.removeFromLeft (juce::jmin (360, r.getWidth()));
     auto place = [&col] (juce::Label& cap, juce::Component& comp)
     {
@@ -789,27 +948,20 @@ void SettingsTab::resized()
 ClockerEditor::ClockerEditor (ClockerProcessor& p)
     : AudioProcessorEditor (p), proc (p)
 {
+    setLookAndFeel (&lnf);
+
     logo = juce::ImageCache::getFromMemory (BinaryData::logo_detective47_dust1200_BLUE_png,
                                             BinaryData::logo_detective47_dust1200_BLUE_pngSize);
 
-    titleLabel.setText ("SOUND DETECTIVE  //  CLOCKER", juce::dontSendNotification);
-    titleLabel.setFont (theme::ui (16.0f, true));
-    titleLabel.setColour (juce::Label::textColourId, theme::amber);
-    addAndMakeVisible (titleLabel);
-
-    statusChip.setFont (theme::mono (13.0f, true));
-    statusChip.setJustificationType (juce::Justification::centredRight);
-    addAndMakeVisible (statusChip);
-
-    tabs.setTabBarDepth (30);
-    tabs.setColour (juce::TabbedComponent::backgroundColourId, theme::bg);
+    tabs.setTabBarDepth (34);
+    tabs.setColour (juce::TabbedComponent::backgroundColourId, theme::desk);
     tabs.setColour (juce::TabbedComponent::outlineColourId, juce::Colours::transparentBlack);
-    tabs.addTab ("Clock",            theme::bg, new ClockTab (proc),    true);
-    tabs.addTab ("Time Log",         theme::bg, new TimeLogTab (proc),  true);
-    tabs.addTab ("Client / Project", theme::bg, new ClientTab (proc),   true);
-    tabs.addTab ("Profitability",    theme::bg, new ProfitTab (proc),   true);
-    tabs.addTab ("Export",           theme::bg, new ExportTab (proc),   true);
-    tabs.addTab ("Settings",         theme::bg, new SettingsTab (proc), true);
+    tabs.addTab ("Clock",            theme::paper, new ClockTab (proc),    true);
+    tabs.addTab ("Time Log",         theme::paper, new TimeLogTab (proc),  true);
+    tabs.addTab ("Client / Project", theme::paper, new ClientTab (proc),   true);
+    tabs.addTab ("Profitability",    theme::paper, new ProfitTab (proc),   true);
+    tabs.addTab ("Export",           theme::paper, new ExportTab (proc),   true);
+    tabs.addTab ("Settings",         theme::paper, new SettingsTab (proc), true);
     addAndMakeVisible (tabs);
 
     proc.addChangeListener (this);
@@ -824,6 +976,7 @@ ClockerEditor::ClockerEditor (ClockerProcessor& p)
 ClockerEditor::~ClockerEditor()
 {
     proc.removeChangeListener (this);
+    setLookAndFeel (nullptr);
 }
 
 void ClockerEditor::changeListenerCallback (juce::ChangeBroadcaster*)
@@ -832,6 +985,7 @@ void ClockerEditor::changeListenerCallback (juce::ChangeBroadcaster*)
         if (auto* t = dynamic_cast<ClockerTab*> (tabs.getTabContentComponent (i)))
             if (t->isVisible())
                 t->refresh();
+    timerCallback();
 }
 
 void ClockerEditor::timerCallback()
@@ -839,40 +993,53 @@ void ClockerEditor::timerCallback()
     switch (proc.clockState())
     {
         case ClockerProcessor::ClockState::running:
-            statusChip.setText ("ON THE CASE  " + formatClock (proc.elapsedMs()), juce::dontSendNotification);
-            statusChip.setColour (juce::Label::textColourId, theme::green);
+            statusText   = (proc.isOnBreak() ? "ON BREAK  " : "ON THE CASE  ") + formatClock (proc.elapsedMs());
+            statusColour = proc.isOnBreak() ? theme::amber : juce::Colour (0xff8fce8f);
             break;
         case ClockerProcessor::ClockState::paused:
-            statusChip.setText ("PAUSED  " + formatClock (proc.elapsedMs()), juce::dontSendNotification);
-            statusChip.setColour (juce::Label::textColourId, theme::amber);
+            statusText   = "PAUSED  " + formatClock (proc.elapsedMs());
+            statusColour = theme::amber;
             break;
         default:
-            statusChip.setText ("OFF THE CLOCK", juce::dontSendNotification);
-            statusChip.setColour (juce::Label::textColourId, theme::dim);
+            statusText   = "OFF THE CLOCK";
+            statusColour = juce::Colours::white.withAlpha (0.45f);
             break;
     }
+    repaint (0, 0, getWidth(), 52);
 }
 
 void ClockerEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (theme::bg);
-    auto header = getLocalBounds().removeFromTop (48);
-    g.setColour (theme::panel);
+    g.fillAll (theme::desk);
+
+    auto header = getLocalBounds().removeFromTop (52);
+    g.setColour (theme::leather);
     g.fillRect (header);
-    g.setColour (theme::amber.withAlpha (0.3f));
-    g.fillRect (header.removeFromBottom (1));
+    g.setColour (theme::amber.withAlpha (0.5f));
+    g.fillRect (header.withTrimmedTop (header.getHeight() - 2));
 
     if (logo.isValid())
-        g.drawImage (logo, juce::Rectangle<float> (10.0f, 6.0f, 36.0f, 36.0f),
+        g.drawImage (logo, juce::Rectangle<float> (10.0f, 4.0f, 44.0f, 44.0f),
                      juce::RectanglePlacement::centred);
+
+    g.setColour (theme::amber);
+    g.setFont (theme::type (17.0f, true));
+    g.drawText ("SOUND DETECTIVE  //  CLOCKER",
+                header.withTrimmedLeft (62).withTrimmedRight (250),
+                juce::Justification::centredLeft);
+    g.setColour (theme::amber.withAlpha (0.55f));
+    g.setFont (theme::type (9.5f));
+    g.drawText ("CASE FILE NO. 47", header.withTrimmedLeft (63).withTrimmedTop (30),
+                juce::Justification::topLeft);
+
+    theme::drawStamp (g, statusText, statusColour,
+                      juce::Rectangle<float> ((float) getWidth() - 236.0f, 11.0f, 220.0f, 30.0f),
+                      -2.5f);
 }
 
 void ClockerEditor::resized()
 {
     auto r = getLocalBounds();
-    auto header = r.removeFromTop (48);
-    header.removeFromLeft (54);
-    statusChip.setBounds (header.removeFromRight (230).reduced (8, 12));
-    titleLabel.setBounds (header.reduced (0, 12));
+    r.removeFromTop (52);
     tabs.setBounds (r);
 }

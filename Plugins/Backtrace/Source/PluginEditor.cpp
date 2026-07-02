@@ -610,6 +610,37 @@ BacktraceEditor::BacktraceEditor(BacktraceProcessor& p)
     liveMixLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(liveMixLabel);
 
+    // GLOBAL OUTPUT FILTER — bottom strip, applies to EVERYTHING at any moment: live preverb,
+    // auditions, and the final print (baked at write time, so hear = print holds).
+    auto setupOutFilter = [this](juce::Slider& s, juce::Label& l, double lo, double hi, double def,
+                                 const char* tip, std::function<void(float)> set)
+    {
+        s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+        s.setRange(lo, hi, 1.0);
+        s.setSkewFactorFromMidPoint(std::sqrt(lo * hi));       // log feel — musical cutoff sweep
+        s.setDoubleClickReturnValue(true, def);
+        s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 56, 16);
+        s.setLookAndFeel(&knobLNF);
+        s.textFromValueFunction = [](double v)
+        { return v < 1000.0 ? juce::String((int) v) + " Hz" : juce::String(v / 1000.0, 1) + " k"; };
+        s.onValueChange = [&s, set] { set((float) s.getValue()); };
+        s.setTooltip(tip);
+        s.updateText();
+        addAndMakeVisible(s);
+        l.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.75f));
+        l.setFont(juce::Font(11.0f, juce::Font::bold));
+        l.setJustificationType(juce::Justification::centred);
+        addAndMakeVisible(l);
+    };
+    setupOutFilter(outHpfKnob, outHpfLabel, 20.0, 2000.0, 20.0,
+                   "GLOBAL HPF - final high-pass over everything (live, audition, print). "
+                   "20 Hz = off. Double-click to reset.",
+                   [this](float v) { proc.setOutHpf(v); });
+    setupOutFilter(outLpfKnob, outLpfLabel, 200.0, 20000.0, 20000.0,
+                   "GLOBAL LPF - final low-pass over everything (live, audition, print). "
+                   "20 kHz = off. Double-click to reset.",
+                   [this](float v) { proc.setOutLpf(v); });
+
     // SHAPE — morphs the swell build-up curve. Centre (50) is the confirmed-good default; the
     // detent makes it easy to return to. Reads Gentle / Default / Bloom so it's obvious what it does.
     liveShapeKnob.setSliderStyle(juce::Slider::LinearHorizontal);
@@ -872,6 +903,8 @@ BacktraceEditor::~BacktraceEditor()
     for (auto* s : delayKnobs)  s->setLookAndFeel(nullptr);
     for (auto* s : reverbKnobs) s->setLookAndFeel(nullptr);
     for (auto* s : { &hpfKnob, &hpfEndKnob, &lpfKnob, &lpfEndKnob, &filterDriveKnob }) s->setLookAndFeel(nullptr);
+    outHpfKnob.setLookAndFeel(nullptr); outLpfKnob.setLookAndFeel(nullptr);
+    liveMixKnob.setLookAndFeel(nullptr);
 }
 
 void BacktraceEditor::pushDelayParams()
@@ -953,6 +986,8 @@ void BacktraceEditor::syncControlsFromProcessor()
     delayBlendSlider.setValue(proc.getDelayBlend(), juce::dontSendNotification);
     delaySwellSlider.setValue(proc.getDelaySwell(), juce::dontSendNotification);
     reverbBlendSlider.setValue(proc.getReverbBlend(), juce::dontSendNotification);
+    outHpfKnob.setValue(proc.getOutHpf(), juce::dontSendNotification);
+    outLpfKnob.setValue(proc.getOutLpf(), juce::dontSendNotification);
 
     const int df = proc.getDelayFlavor();
     delayFlavorBox.setSelectedId(df + 1, juce::dontSendNotification);
@@ -2056,7 +2091,16 @@ void BacktraceEditor::resized()
             auto mixCell = a.removeFromRight(80);
             liveMixLabel.setBounds(mixCell.removeFromTop(16));
             liveMixKnob.setBounds(mixCell);
-            a.removeFromRight(12);
+            a.removeFromRight(4);
+        }
+        {                       // GLOBAL output filter — always-live HPF/LPF beside MIX
+            auto lpfCell = a.removeFromRight(64);
+            outLpfLabel.setBounds(lpfCell.removeFromTop(16));
+            outLpfKnob.setBounds(lpfCell);
+            auto hpfCell = a.removeFromRight(64);
+            outHpfLabel.setBounds(hpfCell.removeFromTop(16));
+            outHpfKnob.setBounds(hpfCell);
+            a.removeFromRight(10);
         }
         const int mw = a.getWidth() / juce::jmax(1, macroKnobs.size());
         for (int i = 0; i < macroKnobs.size(); ++i)

@@ -294,6 +294,16 @@ public:
     float getReverbBlend() const  { return reverbBlendAmt.load(); }
     void  setDelaySwell(float v)  { delaySwellPos.store(juce::jlimit(0.0f, 1.0f, v)); markTailDirty(); }
     float getDelaySwell() const   { return delaySwellPos.load(); }
+
+    // ---- GLOBAL OUTPUT FILTER (bottom strip) -------------------------------------------
+    // A final HPF/LPF over EVERYTHING, applied at any moment: real-time on the output
+    // (live preverb, auditions, passthrough — no latency, no kernel rebuild) and baked
+    // into prints/exports at write time so hear = print holds. Defaults (20 Hz / 20 kHz)
+    // bypass entirely — the validated sound is untouched until the knobs move.
+    void  setOutHpf(float hz) { outHpfHz.store(juce::jlimit(20.0f, 2000.0f, hz));    markDirty(); }
+    float getOutHpf() const   { return outHpfHz.load(); }
+    void  setOutLpf(float hz) { outLpfHz.store(juce::jlimit(200.0f, 20000.0f, hz)); markDirty(); }
+    float getOutLpf() const   { return outLpfHz.load(); }
     static double liveNoteQuarters(int idx)
     { static const double q[] = { 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0 }; return q[juce::jlimit(0, 7, idx)]; }
     static double liveFeelMult(int feel) { return feel == 1 ? 1.5 : feel == 2 ? (2.0 / 3.0) : 1.0; }
@@ -580,6 +590,15 @@ private:
     std::atomic<float> reverbBlendAmt { 1.0f };  // main reverb layer share
     std::atomic<float> delaySwellPos  { 0.5f };  // WHEN the delay blooms (0 early … 1 late into the landing)
     juce::AudioBuffer<float> renderWork2;        // scratch for the delay layer (reused, grows only)
+
+    // Global output filter — TPT SVF state (12 dB/oct, Q 0.707, attenuate-only → level-safe).
+    std::atomic<float> outHpfHz { 20.0f }, outLpfHz { 20000.0f };
+    struct OutSvf { float ic1 = 0.0f, ic2 = 0.0f; };
+    OutSvf outHpState[2], outLpState[2];         // audio-thread only
+    float  outHpZ = 20.0f, outLpZ = 20000.0f;    // smoothed cutoffs (audio-thread only)
+    void   applyOutputFilterRT(juce::AudioBuffer<float>& buf, int numSmp);          // processBlock tail
+    static void applyOutputFilterOffline(juce::AudioBuffer<float>& buf, int len,
+                                         float hpfHz, float lpfHz, double sr);      // print/export bake
     static constexpr float kLiveIRGain = 0.40f;  // L2 (energy) target for the preverb kernel — usable, not blasting
     std::atomic<bool>  liveIRRequested { false }; // worker should rebuild the preverb IR
     std::atomic<int>   liveLatencyApplied { -1 }; // last latency pushed to the host

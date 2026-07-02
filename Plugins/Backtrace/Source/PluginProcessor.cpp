@@ -111,6 +111,9 @@ void BacktraceProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     plateVerb.prepare(sampleRate);
     springVerb.prepare(sampleRate);
 
+    for (int c = 0; c < 2; ++c) { outHpState[c] = {}; outLpState[c] = {}; }   // output filter fresh
+    outHpZ = outHpfHz.load(); outLpZ = outLpfHz.load();
+
     livePreverb.prepare(sampleRate, samplesPerBlock, getTotalNumInputChannels());
     dspPrepared.store(true);               // all DSP sized → the worker may now build the live IR
     if (liveMode.load()) requestLiveIR();  // build the preverb kernel only when Live mode is active
@@ -210,6 +213,10 @@ void BacktraceProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mi
             buffer.getWritePointer(ch)[i] *= g;
     }
 
+    // GLOBAL OUTPUT FILTER — final HPF/LPF over everything heard (live, audition, passthrough).
+    // Before the scope tap so the display shows what you hear. Bypassed at default settings.
+    applyOutputFilterRT(buffer, numSmp);
+
     // LIVE SCOPE tap — decimated peak stream of the FINAL output for the editor's real-time view.
     // Read-only: never writes back to the signal. Lock-free (relaxed atomics); a little tearing on
     // the display is harmless.
@@ -263,6 +270,8 @@ juce::var BacktraceProcessor::getStateVar() const
     o->setProperty("delayBlend",  (double) delayBlendAmt.load());
     o->setProperty("reverbBlend", (double) reverbBlendAmt.load());
     o->setProperty("delaySwell",  (double) delaySwellPos.load());
+    o->setProperty("outHpf",      (double) outHpfHz.load());
+    o->setProperty("outLpf",      (double) outLpfHz.load());
     o->setProperty("preset", (currentPreset >= 0) ? getPresetName(currentPreset) : juce::String());
 
     auto* mac = new juce::DynamicObject();   // global swell macros
@@ -346,6 +355,8 @@ void BacktraceProcessor::setStateVar(const juce::var& v)
     delayBlendAmt.store (o->hasProperty("delayBlend")  ? (float) (double) o->getProperty("delayBlend")  : 0.0f);
     reverbBlendAmt.store(o->hasProperty("reverbBlend") ? (float) (double) o->getProperty("reverbBlend") : 1.0f);
     delaySwellPos.store (o->hasProperty("delaySwell")  ? (float) (double) o->getProperty("delaySwell")  : 0.5f);
+    outHpfHz.store(o->hasProperty("outHpf") ? (float) (double) o->getProperty("outHpf") : 20.0f);
+    outLpfHz.store(o->hasProperty("outLpf") ? (float) (double) o->getProperty("outLpf") : 20000.0f);
     requestLiveIR();                                  // rebuild the preverb kernel for restored settings
     if (dspPrepared.load()) pushLiveLatencyIfChanged();   // report restored preverb latency w/o needing the GUI
 
@@ -566,6 +577,10 @@ juce::File BacktraceProcessor::writeProcessed(const juce::File& dir, const juce:
     juce::AudioBuffer<float> dest;
     const int len = applyEdit(dest);
     if (len <= 0) return {};
+
+    // Bake the global output filter into the print — the audition is heard THROUGH the same
+    // real-time filter, so hear = print holds (the print slot copy below gets it too).
+    applyOutputFilterOffline(dest, len, outHpfHz.load(), outLpfHz.load(), capture.getSampleRate());
 
     dir.createDirectory();
     juce::File f = dir.getChildFile(juce::File::createLegalFileName(prefix) + ".wav");
@@ -2140,6 +2155,59 @@ void BacktraceProcessor::applyReverb(juce::AudioBuffer<float>& buf, int total, b
         space->process(dryL, dryR, outL, outR);
         l[i] = outL;
         if (r) r[i] = outR;
+    }
+}
+
+// ---- Global output filter (12 dB/oct TPT SVF, Q 0.707, no resonance → attenuate-only). ----
+// One shared math for both paths so hear = print: the real-time version filters the stream
+// (smoothed cutoffs, persistent state), the offline version bakes the same curve into a print.
+static inline void btOutSvfPass(float* d, int n, float fc, double sr, bool highpass,
+                                float& ic1, float& ic2)
+{
+    const float g  = std::tan(juce::MathConstants<float>::pi * juce::jlimit(10.0f, (float) (sr * 0.45), fc) / (float) sr);
+    const float k  = 1.4142f;                                    // Q = 0.707 (no resonance)
+    const float a1 = 1.0f / (1.0f + g * (g + k));
+    const float a2 = g * a1;
+    const float a3 = g * a2;
+    for (int i = 0; i < n; ++i)
+    {
+        const float x  = d[i];
+        const float v3 = x - ic2;
+        const float v1 = a1 * ic1 + a2 * v3;
+        const float v2 = ic2 + a2 * ic1 + a3 * v3;
+        ic1 = 2.0f * v1 - ic1;
+        ic2 = 2.0f * v2 - ic2;
+        d[i] = highpass ? (x - k * v1 - v2) : v2;
+    }
+}
+
+void BacktraceProcessor::applyOutputFilterRT(juce::AudioBuffer<float>& buf, int numSmp)
+{
+    const float hpT = outHpfHz.load(), lpT = outLpfHz.load();
+    outHpZ += 0.20f * (hpT - outHpZ);                            // smooth knob moves (no zipper)
+    outLpZ += 0.20f * (lpT - outLpZ);
+    const bool hpOn = outHpZ > 22.0f, lpOn = outLpZ < 19000.0f;
+    if (! hpOn && ! lpOn) return;                                // defaults → true bypass
+    const int nCh = juce::jmin(2, buf.getNumChannels());
+    for (int c = 0; c < nCh; ++c)
+    {
+        float* d = buf.getWritePointer(c);
+        if (hpOn) btOutSvfPass(d, numSmp, outHpZ, currentSR, true,  outHpState[c].ic1, outHpState[c].ic2);
+        if (lpOn) btOutSvfPass(d, numSmp, outLpZ, currentSR, false, outLpState[c].ic1, outLpState[c].ic2);
+    }
+}
+
+void BacktraceProcessor::applyOutputFilterOffline(juce::AudioBuffer<float>& buf, int len,
+                                                  float hpfHz, float lpfHz, double sr)
+{
+    const bool hpOn = hpfHz > 22.0f, lpOn = lpfHz < 19000.0f;
+    if (! hpOn && ! lpOn) return;
+    for (int c = 0; c < juce::jmin(2, buf.getNumChannels()); ++c)
+    {
+        float* d = buf.getWritePointer(c);
+        float h1 = 0.0f, h2 = 0.0f, l1 = 0.0f, l2 = 0.0f;       // fresh state per render (deterministic)
+        if (hpOn) btOutSvfPass(d, len, hpfHz, sr, true,  h1, h2);
+        if (lpOn) btOutSvfPass(d, len, lpfHz, sr, false, l1, l2);
     }
 }
 
